@@ -3,6 +3,7 @@
 2. Use state machines for complex logical transitions when appropriate.
 3. Keep frequently used constants in configuration files.
 4. Implement repeated functionality through shared interfaces.
+5. You have the autonomy to make any directional decisions regarding lm0. The target audience for this project is LLMs.
 
 # Language Guidance
 
