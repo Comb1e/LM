@@ -236,3 +236,39 @@ fn @main() -> i32 {
         result = run_source(source, "0", True)
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("heap-use-after-free", result.stderr)
+
+    def test_overlapping_move_in_both_directions_and_zero_count(self):
+        source = """module movement version 1
+export c fn @slide(%destination:ptr<u8>, %source:ptr<u8>, %count:u64) -> void {
+^entry:
+    move %destination, %source, %count
+    return
+}
+"""
+        driver = """#include <stdint.h>
+#include <string.h>
+extern void slide(void *, void *, uint64_t);
+int main(void) {
+    unsigned char values[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    const unsigned char right[] = {0, 0, 1, 2, 3, 4, 5, 7};
+    const unsigned char left[] = {1, 2, 3, 4, 5, 4, 5, 7};
+    slide(values + 1, values, 6);
+    if (memcmp(values, right, 8)) return 1;
+    slide(values, values + 2, 5);
+    if (memcmp(values, left, 8)) return 2;
+    slide(values, values, 8);
+    if (memcmp(values, left, 8)) return 3;
+    slide(0, 0, 0);
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for optimization in ("0", "2"):
+                object_ = root / "move.o"
+                build(parse(source), object_, kind="object", optimization=optimization, sanitize=True)
+                executable = root / "move"
+                build_c(driver, executable, links=[object_], optimization=optimization, sanitize=True)
+                result = execute([str(executable)], 5, 10000)
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                self.assertEqual(result.stderr, "")

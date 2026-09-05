@@ -7,3 +7,6 @@ dist/
 .coverage
 .pytest_cache/
 bench-results/
+node_modules/
+test-results/
+playwright-report/

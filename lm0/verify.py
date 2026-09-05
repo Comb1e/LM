@@ -215,7 +215,7 @@ class Verifier:
             self.same(self.reg(args[0]), Type("ptr", self.reg(args[1])))
         elif rule == "copy":
             self.require(all(self.reg(arg).name == "ptr" for arg in args[:2]),
-                         "E_TYPE", "copy requires two pointers")
+                         "E_TYPE", f"{ins.op} requires two pointers")
             self.same(self.reg(args[2]), U64)
         elif rule == "size":
             self.storage(args[0])

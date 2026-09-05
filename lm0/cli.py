@@ -28,7 +28,7 @@ def parser():
         if name == "run":
             command.add_argument("--timeout", type=float)
         if name == "build":
-            command.add_argument("--kind", choices=["exe", "object"], default="exe")
+            command.add_argument("--kind", choices=["exe", "object", "shared"], default="exe")
         if name == "emit-c":
             command.add_argument("--entry", action="store_true", help="Emit executable main wrapper")
         if name in {"inspect", "replace"}:

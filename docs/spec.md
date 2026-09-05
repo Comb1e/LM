@@ -150,7 +150,11 @@ establish a valid allocation or lifetime.
   live, large enough, and initialized with a valid representation when read.
 - `copy %destination, %source, %bytes` copies a `u64` number of bytes. Positive
   counts require valid disjoint ranges. Zero counts perform no access and permit
-  null pointers. Overlapping copies are undefined; there is no implicit memmove.
+  null pointers. Overlapping copies are undefined.
+- `move %destination, %source, %bytes` has the same pointer and count types as
+  `copy`, but permits overlapping ranges. It behaves as if the source bytes were
+  read into temporary storage before any destination bytes were written. Zero
+  counts perform no access and permit null pointers. It lowers to C `memmove`.
 
 There is no provenance tracker or bounds/lifetime verifier. Invalid memory
 operations, reads of uninitialized values, and invalid Boolean/pointer
@@ -188,6 +192,13 @@ Signedness/width, return types, and actual foreign function conventions must mat
 There is no language-level module linker or cross-object type checking. Multiple
 objects can communicate through C exports/imports. Variadic functions, function
 pointers, callbacks, and aggregate-by-value signatures are not supported.
+
+`lm0 build --kind shared` produces a position-independent shared library without
+a `main` wrapper. Exported functions can be loaded by native hosts such as Python
+`ctypes`; internal functions and data remain private. Imports must resolve at
+link time through `--link` or `--library`. A sanitized library must be loaded by
+a host with a compatible sanitizer runtime initialized before the library.
+Traps still terminate the host process; they do not become foreign exceptions.
 
 ## Diagnostics and Limits
 

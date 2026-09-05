@@ -1,0 +1,14 @@
+{
+  "name": "lm0-snake-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "assets": "esbuild icons-entry.js --bundle --minify --format=esm --outfile=static/icons.js",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "esbuild": "0.27.3",
+    "lucide": "0.577.0"
+  }
+}

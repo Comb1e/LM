@@ -23,9 +23,14 @@ by a replacement operation. Read `docs/instructions.md` for operand signatures.
 8. Initialize memory before reading. Keep addresses inside live allocations.
    Free each heap base once and never free stack/static storage. `load`/`store`
    require exact pointer-element types. `field` addresses a named struct field.
+   Use `move` for possibly overlapping byte ranges and `copy` for disjoint ones;
+   both take a `u64` byte count and allow null pointers only when it is zero.
 9. Use `call @name(%args)` with a destination for every non-void return.
    An executable needs `fn @main() -> i32`. Imported/exported C functions start
    with `extern c fn` / `export c fn`. There are no variadic or indirect calls.
+   `lm0 build --kind shared` builds exported functions for a native host without
+   requiring `main`. Match the host's ABI types and release LM0 allocations via
+   an exported destructor. A native trap terminates the host process.
 10. Run `lm0 check` before building. For repairs, use diagnostic code, source
     span, and function/block/register identifiers. Use `lm0 inspect` for required
     context and `lm0 replace` for atomic, validated changes to parseable source.

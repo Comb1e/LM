@@ -27,6 +27,7 @@ The compiler's shared registry is `lm0/ops.py`; `inspect` exposes its entries.
 | `%r:T = load %pointer` | Read scalar T from ptr<T> |
 | `store %pointer, %value` | Write scalar T to ptr<T> |
 | `copy %destination, %source, %bytes` | Two pointers and u64 byte count; disjoint ranges |
+| `move %destination, %source, %bytes` | Two pointers and u64 byte count; overlap allowed |
 | `%r:u64 = sizeof T` | Target ABI storage size |
 | `%r:u64 = alignof T` | Target ABI alignment |
 | `%r:ptr<u8> = address @data` | Static UTF-8 byte data |

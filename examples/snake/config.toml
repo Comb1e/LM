@@ -1,0 +1,24 @@
+[game]
+width = 24
+height = 24
+initial_length = 5
+points_per_food = 10
+default_speed = 8
+min_speed = 4
+max_speed = 16
+
+[server]
+host = "127.0.0.1"
+port = 4173
+max_sessions = 128
+session_ttl_seconds = 3600
+max_body_bytes = 1024
+request_timeout_seconds = 10
+
+[visual]
+background = "#111917"
+grid = "#1c2823"
+snake = "#b4f36c"
+tail = "#4d9670"
+food = "#ff776b"
+eyes = "#15231a"

@@ -175,8 +175,9 @@ class Emitter:
             output.append(f"memcpy(&{reg(ins.dest.name)}, {a}, sizeof({reg(ins.dest.name)}));")
         elif op == "store":
             output.append(f"memcpy({a}, &{b}, sizeof({b}));")
-        elif op == "copy":
-            output.append(f"if ({reg(args[2])}) memcpy({a}, {b}, (size_t){reg(args[2])});")
+        elif op in {"copy", "move"}:
+            operation = "memcpy" if op == "copy" else "memmove"
+            output.append(f"if ({reg(args[2])}) {operation}({a}, {b}, (size_t){reg(args[2])});")
         elif op in {"sizeof", "alignof"}:
             expression = f"{'sizeof' if op == 'sizeof' else '_Alignof'}({self.ctype(args[0])})"
         elif op == "address":

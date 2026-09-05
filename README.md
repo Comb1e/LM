@@ -3,7 +3,7 @@
 LM0 is an experimental, low-level programming language for LLM generation and
 repair. Programs use typed virtual registers, basic blocks, explicit memory
 operations, native pointers, and manual allocation. The compiler emits C11 and
-uses GCC to produce native executables or C-linkable object files.
+uses GCC to produce native executables, C-linkable object files, or shared libraries.
 
 The design targets reliable generation by existing LLMs. Its advantage over C
 is a hypothesis, not an established benchmark result. Explicit dependencies,
@@ -65,6 +65,22 @@ fn @main() -> i32 {
 Read the [language specification](docs/spec.md), [grammar](docs/grammar.ebnf),
 [instruction table](docs/instructions.md), and [LLM instruction sheet](docs/llm.md).
 
+## Play Snake
+
+Snake is a complete application with its game rules and state machine written
+in LM0, hosted by a small Python server with a responsive browser UI:
+
+```sh
+python3 -m examples.snake.server
+```
+
+Open <http://127.0.0.1:4173>. Use `--port 4175` if that port is occupied. No npm
+install or external service is needed to play. It includes classic and wrap
+modes, adjustable pace, keyboard/swipe/touch input, sound, and local score history.
+See [the game guide](examples/snake/README.md) for controls, configuration,
+architecture, and tests. The project led to [two LM0 improvements](docs/experience/snake.md):
+shared-library builds and the overlap-safe `move` instruction.
+
 ## Reporting Problems
 
 LLMs and human users can report language, compiler, tooling, and documentation
@@ -78,6 +94,7 @@ python3 -m lm0 emit-c examples/array_sum.lm0 --entry -o build/array_sum.c
 python3 -m lm0 inspect examples/array_sum.lm0 --function sum --block step
 python3 -m lm0 replace program.lm0 --function sum --block step --replacement step.txt -o repaired.lm0
 python3 -m lm0 build examples/ffi.lm0 --kind object -o build/ffi.o
+python3 -m lm0 build examples/ffi.lm0 --kind shared -o build/ffi.so
 gcc examples/ffi_driver.c build/ffi.o -o build/ffi-demo
 ./build/ffi-demo
 ```

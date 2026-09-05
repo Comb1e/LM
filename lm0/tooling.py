@@ -129,8 +129,8 @@ def build_c(source: str, output: str | Path, *, kind="exe", optimization=None,
     if target.exit_code or target.timed_out or target.stdout.strip() != config["compiler"]["target"]:
         raise CompileError([Diagnostic("E_TARGET", "backend", "Unsupported compiler target",
                                        expected=config["compiler"]["target"], actual=target.stdout.strip())])
-    if kind not in {"exe", "object"}:
-        raise ValueError("Build kind must be exe or object")
+    if kind not in {"exe", "object", "shared"}:
+        raise ValueError("Build kind must be exe, object, or shared")
     optimization = optimization or config["compiler"]["optimization"]
     if optimization not in {"0", "1", "2", "3", "s"}:
         raise ValueError("Invalid optimization level")
@@ -148,9 +148,13 @@ def build_c(source: str, output: str | Path, *, kind="exe", optimization=None,
                    "-Wno-unused-variable", "-Wno-unused-function", "-Wno-unused-label",
                    "-Wno-unused-parameter", str(c_path), "-o", str(binary)]
         if sanitize:
-            command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer", "-fno-pie"]
+            command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
+            if kind != "shared":
+                command.append("-fno-pie")
             if kind == "exe":
                 command.append("-no-pie")
+        if kind == "shared":
+            command += ["-fPIC", "-shared", "-Wl,-z,defs"]
         if kind == "object":
             command.append("-c")
         else:

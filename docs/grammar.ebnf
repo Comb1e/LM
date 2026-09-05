@@ -20,7 +20,7 @@ operation    = "const", literal
              | "stack", type, ",", integer
              | "alloc", type, ",", register
              | "field", register, ",", name
-             | "copy", register, ",", register, ",", register
+             | ("copy" | "move"), register, ",", register, ",", register
              | ("sizeof" | "alignof"), type
              | "address", symbol
              | "jump", target

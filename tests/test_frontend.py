@@ -75,6 +75,10 @@ class FrontendTests(unittest.TestCase):
         self.rejected(self.function("    %p:ptr<i32> = stack i32, 1\n    %a:u32 = const 1\n    store %p, %a\n    trap"), "E_TYPE")
         self.rejected(self.function("    %p:i32 = const 1\n    free %p\n    trap"), "E_TYPE")
         self.rejected(self.function("    %x:u64 = sizeof void\n    trap"), "E_TYPE")
+        for operation in ("copy", "move"):
+            self.rejected(self.function(f"%p:ptr<u8> = null\n%n:i64 = const 0\n{operation} %p, %p, %n\ntrap"), "E_TYPE")
+            self.rejected(self.function(f"%p:u64 = const 0\n{operation} %p, %p, %p\ntrap"), "E_TYPE")
+            self.rejected(self.function(f"%p:ptr<u8> = null\n%n:u64 = const 0\n%x:u64 = {operation} %p, %p, %n\ntrap"), "E_RESULT")
 
     def test_invalid_calls_and_abi(self):
         self.rejected(self.function("    %a:i32 = call @missing()\n    return %a"), "E_FUNCTION")

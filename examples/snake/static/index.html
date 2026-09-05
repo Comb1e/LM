@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151715">
+  <title>Snake | LM0 Arcade</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="LM0 Arcade home">
+        <img src="/favicon.svg" width="34" height="34" alt="">
+        <span>LM0<span class="brand-divider">/</span>ARCADE</span>
+      </a>
+      <span class="edition">A LITTLE OFFLINE TIME.</span>
+      <div class="header-tools">
+        <button class="icon-button" id="sound" aria-label="Enable sound" aria-pressed="false" data-tip="Enable sound"><i data-icon="VolumeX"></i></button>
+        <button class="icon-button" id="fullscreen" aria-label="Enter fullscreen" data-tip="Fullscreen"><i data-icon="Maximize"></i></button>
+      </div>
+    </header>
+
+    <main id="game-shell">
+      <div class="page-heading">
+        <div class="title-line"><h1>Snake<span class="title-dot">.</span></h1><span class="game-number">001</span></div>
+        <div class="heading-note"><span class="tiny-square"></span> ONE MORE ROUND</div>
+      </div>
+
+      <div class="game-layout">
+        <section class="play-area" aria-label="Snake game">
+          <div class="score-strip">
+            <div class="score-item main-score"><span class="label">SCORE</span><strong id="score">000</strong></div>
+            <div class="score-item"><span class="label"><i data-icon="Trophy"></i> PERSONAL BEST</span><strong id="best">000</strong></div>
+            <div class="score-item length-score"><span class="label">LENGTH</span><strong><span id="length">05</span><span class="score-unit">cells</span></strong></div>
+          </div>
+
+          <div class="board-frame" id="board-frame">
+            <canvas id="board" tabindex="0" role="img" aria-label="Snake game board. Move with the arrow keys, W A S D, or touch controls. Space pauses the game."></canvas>
+            <div class="state-overlay" id="overlay">
+              <span class="overlay-eyebrow" id="overlay-eyebrow">SNAKE / 001</span>
+              <h2 id="overlay-title">Getting ready</h2>
+              <p id="overlay-detail" hidden></p>
+              <button id="play" class="primary-button" disabled><i data-icon="Play"></i><span id="play-label">Loading</span></button>
+            </div>
+            <span class="board-corner top-left" aria-hidden="true"></span>
+            <span class="board-corner bottom-right" aria-hidden="true"></span>
+            <div id="food-gain" class="food-gain" aria-hidden="true"></div>
+          </div>
+
+          <div class="board-footer">
+            <span class="live-state"><span id="state-dot" class="state-dot"></span><span id="status">Connecting</span></span>
+            <span id="board-size">24 &times; 24</span>
+            <div class="board-actions">
+              <button id="pause" class="icon-button" aria-label="Pause game" data-tip="Pause" disabled><i data-icon="Pause"></i></button>
+              <button id="restart" class="icon-button" aria-label="New game" data-tip="New game" disabled><i data-icon="RotateCcw"></i></button>
+            </div>
+          </div>
+
+          <div class="touch-controls" aria-label="Direction controls">
+            <button class="direction-button direction-up" data-direction="0" aria-label="Move up"><i data-icon="ArrowUp"></i></button>
+            <button class="direction-button direction-left" data-direction="3" aria-label="Move left"><i data-icon="ArrowLeft"></i></button>
+            <button class="direction-button direction-down" data-direction="2" aria-label="Move down"><i data-icon="ArrowDown"></i></button>
+            <button class="direction-button direction-right" data-direction="1" aria-label="Move right"><i data-icon="ArrowRight"></i></button>
+          </div>
+        </section>
+
+        <aside class="sidebar" aria-label="Game settings and history">
+          <section class="settings-section">
+            <div class="section-heading"><h2>The next round</h2><span class="section-number">01</span></div>
+            <fieldset class="mode-field"><legend class="label">GAME MODE</legend>
+              <div class="segmented" id="modes">
+                <button type="button" data-mode="classic" aria-pressed="true">Classic</button>
+                <button type="button" data-mode="wrap" aria-pressed="false">Wrap</button>
+              </div>
+            </fieldset>
+            <div class="speed-heading"><label class="label" for="speed">PACE</label><span><output id="speed-value" for="speed">8</output><span class="speed-unit"> cells / sec</span></span></div>
+            <input id="speed" type="range" min="4" max="16" step="1" value="8">
+            <div class="range-labels"><span>Unhurried</span><span>Relentless</span></div>
+          </section>
+
+          <section class="color-section">
+            <div class="swatch-heading"><h2 class="label">YOUR COLOR</h2><span id="color-name">Lime</span></div>
+            <div class="swatches" role="group" aria-label="Snake color">
+              <button class="swatch lime" data-color="lime" aria-label="Lime" aria-pressed="true" data-tip="Lime"><i data-icon="Check"></i></button>
+              <button class="swatch mint" data-color="mint" aria-label="Mint" aria-pressed="false" data-tip="Mint"><i data-icon="Check"></i></button>
+              <button class="swatch ice" data-color="ice" aria-label="Ice" aria-pressed="false" data-tip="Ice"><i data-icon="Check"></i></button>
+              <button class="swatch rose" data-color="rose" aria-label="Rose" aria-pressed="false" data-tip="Rose"><i data-icon="Check"></i></button>
+            </div>
+          </section>
+
+          <section class="run-section">
+            <div class="section-heading"><h2>Recent runs</h2><span class="section-number">02</span></div>
+            <ol id="history" class="history"><li class="empty-history"><span class="empty-mark"><i data-icon="RotateCcw"></i></span>No finished runs yet</li></ol>
+            <div class="session-total"><span>ROUNDS FINISHED</span><span id="rounds">00</span></div>
+          </section>
+
+          <div class="arcade-stamp" aria-hidden="true">
+            <div class="pixel-art"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+            <span>STAY A LITTLE<br>LONGER.</span>
+            <i data-icon="MoveUpRight"></i>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="page-footer"><span>SMALL GAME. GOOD TIME.</span><span>LM0 ARCADE<span class="footer-square"></span>EST. 2026</span></footer>
+  </div>
+
+  <dialog id="restart-dialog" aria-labelledby="dialog-title">
+    <div class="dialog-top"><span class="label">FRESH START</span><button class="icon-button" id="dialog-close" aria-label="Cancel new game"><i data-icon="X"></i></button></div>
+    <h2 id="dialog-title">Another round?</h2>
+    <p>Your current run will end.</p>
+    <div class="dialog-actions"><button class="secondary-button" id="dialog-cancel">Keep playing</button><button class="primary-button" id="dialog-confirm"><i data-icon="RotateCcw"></i>New game</button></div>
+  </dialog>
+  <div class="announcement" id="announcement" role="status" aria-live="polite"></div>
+</body>
+</html>
