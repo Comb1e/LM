@@ -65,6 +65,12 @@ fn @main() -> i32 {
 Read the [language specification](docs/spec.md), [grammar](docs/grammar.ebnf),
 [instruction table](docs/instructions.md), and [LLM instruction sheet](docs/llm.md).
 
+## Reporting Problems
+
+LLMs and human users can report language, compiler, tooling, and documentation
+problems through the [issue-reporting workflow](docs/reporting.md). It provides
+GitHub submission commands, a report template, and an offline fallback.
+
 ## Tools
 
 ```sh

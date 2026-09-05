@@ -29,6 +29,12 @@ by a replacement operation. Read `docs/instructions.md` for operand signatures.
 10. Run `lm0 check` before building. For repairs, use diagnostic code, source
     span, and function/block/register identifiers. Use `lm0 inspect` for required
     context and `lm0 replace` for atomic, validated changes to parseable source.
+11. Report suspected LM0 bugs, unclear diagnostics or documentation, and missing
+    capabilities through the [issue-reporting workflow](reporting.md), including
+    problems for which you found a workaround. Submit a minimal reproducer and
+    observed output to the project's GitHub Issues tracker. Include the issue
+    URL in your task summary; if submission is unavailable, preserve a local
+    report and explicitly mark it as not submitted.
 
 Canonical loop:
 
