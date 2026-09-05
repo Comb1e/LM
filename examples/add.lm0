@@ -1,0 +1,15 @@
+module example version 1
+
+fn @add(%a:i32, %b:i32) -> i32 {
+^entry:
+    %sum:i32 = add %a, %b
+    return %sum
+}
+
+fn @main() -> i32 {
+^entry:
+    %a:i32 = const 20
+    %b:i32 = const 22
+    %result:i32 = call @add(%a, %b)
+    return %result
+}

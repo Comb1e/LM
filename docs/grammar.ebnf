@@ -1,0 +1,51 @@
+(* Lexical whitespace excludes newline. # comments extend to newline. *)
+module       = lines, "module", name, "version", integer, endline,
+               { declaration }, EOF ;
+declaration  = function | foreign | structure | data ;
+function     = [ "export", "c" ], "fn", symbol, params, "->", type,
+               "{", endline, { block }, "}", endline ;
+foreign      = "extern", "c", "fn", symbol, params, "->", type, endline ;
+structure    = "struct", name, "{", endline,
+               { name, ":", type, endline }, "}", endline ;
+data         = "data", symbol, "=", json_string, endline ;
+params       = "(", [ param, { ",", param } ], ")" ;
+param        = register, ":", type ;
+block        = label, [ params ], ":", endline, { instruction } ;
+instruction  = [ param, "=" ], operation, endline ;
+operation    = "const", literal
+             | ("null" | "trap")
+             | binary_op, register, ",", register
+             | unary_op, register
+             | "call", symbol, arguments
+             | "stack", type, ",", integer
+             | "alloc", type, ",", register
+             | "field", register, ",", name
+             | "copy", register, ",", register, ",", register
+             | ("sizeof" | "alignof"), type
+             | "address", symbol
+             | "jump", target
+             | "branch", register, ",", target, ",", target
+             | "return", [ register ] ;
+binary_op    = "add" | "sub" | "mul" | "div" | "rem" | "and" | "or"
+             | "xor" | "shl" | "shr" | "eq" | "ne" | "lt" | "le"
+             | "gt" | "ge" | "offset" | "store" ;
+unary_op     = "neg" | "not" | "cast" | "ptrtoint" | "inttoptr" | "load" | "free" ;
+target       = label, arguments ;
+arguments    = "(", [ register, { ",", register } ], ")" ;
+type         = name | "ptr", "<", type, ">" | "[", type, ";", integer, "]" ;
+register     = "%", name ;
+symbol       = "@", name ;
+label        = "^", name ;
+name         = (letter | "_"), { letter | digit | "_" } ;
+integer      = [ "-" ], (digits | ("0x" | "0X"), hex_digits) ;
+literal      = integer | decimal_float | "true" | "false" | "inf" | "-inf" | "nan" ;
+decimal_float = [ "-" ], digits, [ ".", [ digits ] ], [ exponent ] ;
+exponent     = ("e" | "E"), [ "+" | "-" ], digits ;
+digits       = digit, { digit } ;
+hex_digits   = hex_digit, { hex_digit } ;
+lines        = { NEWLINE } ;
+endline      = (NEWLINE, lines) | EOF ;
+(* letter/digit/hex_digit are ASCII; json_string follows JSON escaping.
+   Registers, symbols, and labels have no whitespace inside their tokens.
+   The verifier enforces result presence, types, and block termination.
+   This EBNF describes syntax; it is not a decoder-specific grammar file. *)

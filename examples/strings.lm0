@@ -1,0 +1,32 @@
+module strings version 1
+
+data @message = "Hello from LM0\u0000"
+extern c fn @puts(%text:ptr<u8>) -> i32
+
+fn @length(%text:ptr<u8>) -> u64 {
+^entry:
+    %zero:u64 = const 0
+    jump ^loop(%zero)
+^loop(%index:u64):
+    %offset:i64 = cast %index
+    %pointer:ptr<u8> = offset %text, %offset
+    %byte:u8 = load %pointer
+    %terminator:u8 = const 0
+    %finished:bool = eq %byte, %terminator
+    branch %finished, ^done(%index), ^advance(%index)
+^advance(%previous:u64):
+    %one:u64 = const 1
+    %next:u64 = add %previous, %one
+    jump ^loop(%next)
+^done(%result:u64):
+    return %result
+}
+
+fn @main() -> i32 {
+^entry:
+    %text:ptr<u8> = address @message
+    %printed:i32 = call @puts(%text)
+    %length:u64 = call @length(%text)
+    %result:i32 = cast %length
+    return %result
+}

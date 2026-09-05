@@ -1,0 +1,16 @@
+[compiler]
+cc = "gcc"
+optimization = "0"
+target = "x86_64-linux-gnu"
+build_timeout_seconds = 30
+
+[limits]
+source_bytes = 1048576
+type_depth = 32
+aggregate_bytes = 1073741824
+run_timeout_seconds = 5
+output_bytes = 1048576
+diagnostics = 100
+
+[benchmark]
+max_repairs = 3

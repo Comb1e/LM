@@ -1,0 +1,48 @@
+module linked_list version 1
+
+struct Node {
+    value:i64
+    next:ptr<Node>
+}
+
+fn @sum_nodes(%head:ptr<Node>) -> i64 {
+^entry:
+    %zero:i64 = const 0
+    jump ^loop(%head, %zero)
+^loop(%node:ptr<Node>, %total:i64):
+    %null:ptr<Node> = null
+    %present:bool = ne %node, %null
+    branch %present, ^visit(%node, %total), ^done(%total)
+^visit(%current:ptr<Node>, %accumulator:i64):
+    %value_pointer:ptr<i64> = field %current, value
+    %value:i64 = load %value_pointer
+    %added:i64 = add %accumulator, %value
+    %next_pointer:ptr<ptr<Node>> = field %current, next
+    %next:ptr<Node> = load %next_pointer
+    jump ^loop(%next, %added)
+^done(%result:i64):
+    return %result
+}
+
+fn @main() -> i32 {
+^entry:
+    %count:u64 = const 2
+    %nodes:ptr<Node> = alloc Node, %count
+    %one:i64 = const 1
+    %second:ptr<Node> = offset %nodes, %one
+    %first_value:ptr<i64> = field %nodes, value
+    %twenty:i64 = const 20
+    store %first_value, %twenty
+    %first_next:ptr<ptr<Node>> = field %nodes, next
+    store %first_next, %second
+    %second_value:ptr<i64> = field %second, value
+    %twentytwo:i64 = const 22
+    store %second_value, %twentytwo
+    %second_next:ptr<ptr<Node>> = field %second, next
+    %null:ptr<Node> = null
+    store %second_next, %null
+    %sum:i64 = call @sum_nodes(%nodes)
+    free %nodes
+    %result:i32 = cast %sum
+    return %result
+}

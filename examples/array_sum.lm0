@@ -1,0 +1,40 @@
+module array_sum version 1
+
+export c fn @sum(%base:ptr<i64>, %count:u64) -> i64 {
+^entry:
+    %zero:u64 = const 0
+    %initial:i64 = const 0
+    jump ^loop(%zero, %initial)
+^loop(%index:u64, %total:i64):
+    %more:bool = lt %index, %count
+    branch %more, ^step(%index, %total), ^done(%total)
+^step(%position:u64, %accumulator:i64):
+    %offset:i64 = cast %position
+    %address:ptr<i64> = offset %base, %offset
+    %value:i64 = load %address
+    %added:i64 = add %accumulator, %value
+    %one:u64 = const 1
+    %next:u64 = add %position, %one
+    jump ^loop(%next, %added)
+^done(%result:i64):
+    return %result
+}
+
+fn @main() -> i32 {
+^entry:
+    %array:ptr<i64> = stack i64, 3
+    %ten:i64 = const 10
+    store %array, %ten
+    %one:i64 = const 1
+    %second:ptr<i64> = offset %array, %one
+    %twenty:i64 = const 20
+    store %second, %twenty
+    %two:i64 = const 2
+    %third:ptr<i64> = offset %array, %two
+    %twelve:i64 = const 12
+    store %third, %twelve
+    %count:u64 = const 3
+    %sum:i64 = call @sum(%array, %count)
+    %result:i32 = cast %sum
+    return %result
+}

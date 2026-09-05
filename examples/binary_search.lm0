@@ -1,0 +1,52 @@
+module binary_search version 1
+
+fn @search(%data:ptr<i64>, %length:i64, %key:i64) -> i64 {
+^entry:
+    %zero:i64 = const 0
+    jump ^loop(%zero, %length)
+^loop(%low:i64, %high:i64):
+    %more:bool = lt %low, %high
+    branch %more, ^probe(%low, %high), ^missing()
+^probe(%left:i64, %right:i64):
+    %width:i64 = sub %right, %left
+    %two:i64 = const 2
+    %half:i64 = div %width, %two
+    %middle:i64 = add %left, %half
+    %pointer:ptr<i64> = offset %data, %middle
+    %value:i64 = load %pointer
+    %equal:bool = eq %value, %key
+    branch %equal, ^found(%middle), ^choose(%left, %right, %middle, %value)
+^choose(%old_low:i64, %old_high:i64, %mid:i64, %item:i64):
+    %smaller:bool = lt %item, %key
+    branch %smaller, ^upper(%old_high, %mid), ^lower(%old_low, %mid)
+^upper(%upper_bound:i64, %previous:i64):
+    %one:i64 = const 1
+    %next:i64 = add %previous, %one
+    jump ^loop(%next, %upper_bound)
+^lower(%lower_bound:i64, %next_high:i64):
+    jump ^loop(%lower_bound, %next_high)
+^found(%result:i64):
+    return %result
+^missing:
+    %absent:i64 = const -1
+    return %absent
+}
+
+fn @main() -> i32 {
+^entry:
+    %array:ptr<i64> = stack i64, 3
+    %first:i64 = const 3
+    store %array, %first
+    %one:i64 = const 1
+    %second:ptr<i64> = offset %array, %one
+    %second_value:i64 = const 7
+    store %second, %second_value
+    %two:i64 = const 2
+    %third:ptr<i64> = offset %array, %two
+    %third_value:i64 = const 11
+    store %third, %third_value
+    %length:i64 = const 3
+    %index:i64 = call @search(%array, %length, %second_value)
+    %result:i32 = cast %index
+    return %result
+}

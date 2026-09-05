@@ -1,0 +1,8 @@
+module ffi version 1
+
+export c fn @twice(%value:i64) -> i64 {
+^entry:
+    %two:i64 = const 2
+    %result:i64 = mul %value, %two
+    return %result
+}

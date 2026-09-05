@@ -1,0 +1,54 @@
+module sort version 1
+
+fn @sort(%data:ptr<i64>, %length:i64) -> void {
+^entry:
+    %one:i64 = const 1
+    %last:i64 = sub %length, %one
+    jump ^outer(%last)
+^outer(%end:i64):
+    %zero:i64 = const 0
+    %more:bool = gt %end, %zero
+    branch %more, ^inner(%zero, %end), ^done()
+^inner(%index:i64, %bound:i64):
+    %continue:bool = lt %index, %bound
+    branch %continue, ^compare(%index, %bound), ^shrink(%bound)
+^compare(%at:i64, %limit:i64):
+    %step:i64 = const 1
+    %next:i64 = add %at, %step
+    %left:ptr<i64> = offset %data, %at
+    %right:ptr<i64> = offset %data, %next
+    %a:i64 = load %left
+    %b:i64 = load %right
+    %inverted:bool = gt %a, %b
+    branch %inverted, ^swap(%left, %right, %a, %b, %next, %limit), ^inner(%next, %limit)
+^swap(%p:ptr<i64>, %q:ptr<i64>, %x:i64, %y:i64, %next_index:i64, %inner_limit:i64):
+    store %p, %y
+    store %q, %x
+    jump ^inner(%next_index, %inner_limit)
+^shrink(%old_bound:i64):
+    %decrement:i64 = const 1
+    %new_bound:i64 = sub %old_bound, %decrement
+    jump ^outer(%new_bound)
+^done:
+    return
+}
+
+fn @main() -> i32 {
+^entry:
+    %array:ptr<i64> = stack i64, 3
+    %a:i64 = const 9
+    store %array, %a
+    %one:i64 = const 1
+    %second:ptr<i64> = offset %array, %one
+    %b:i64 = const 2
+    store %second, %b
+    %two:i64 = const 2
+    %third:ptr<i64> = offset %array, %two
+    %c:i64 = const 5
+    store %third, %c
+    %length:i64 = const 3
+    call @sort(%array, %length)
+    %smallest:i64 = load %array
+    %result:i32 = cast %smallest
+    return %result
+}

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lm0-lang"
+version = "0.1.0"
+description = "Typed assembly for LLM generation and repair, compiled to native code"
+requires-python = ">=3.11"
+license = "MIT"
+
+[project.scripts]
+lm0 = "lm0.cli:main"
+
+[tool.setuptools.package-data]
+lm0 = ["defaults.toml", "runtime.h"]
+
+[tool.setuptools.packages.find]
+include = ["lm0*"]
