@@ -4,7 +4,7 @@ The benchmark tests generation and repair, without contacting a model service.
 Export prompts and separate evaluation cases:
 
 ```sh
-python3 -m lm0 bench export build/benchmark
+lm0-bench export build/benchmark
 ```
 
 - `tasks.jsonl`: 20 programming tasks, paired LM0/C signatures, constraints, and
@@ -55,20 +55,23 @@ case in order. Imported results are trusted external observations, not proof
 that the submitted source produced them; reports label their origin.
 
 ```sh
-python3 -m lm0 bench grade responses.jsonl -o build/report.json
-python3 -m lm0 bench grade responses.jsonl --execute --sanitize -o build/report.json
+lm0-bench grade responses.jsonl -o build/report.json
+lm0-bench grade responses.jsonl --execute --sanitize -o build/report.json
 ```
 
-Without `--execute`, LM0 source is parsed and verified, and imported results are
-graded if present. Without execution evidence, functional correctness is null.
-C parsing/verification rates remain null: GCC's full compilation is checked only
-during local execution, and syntax is not separated from semantic errors.
+Without `--execute`, LM0 source is checked by the native compiler, and imported
+results are graded if present. Without execution evidence, functional
+correctness is null. C parsing/verification rates remain null: GCC's full
+compilation is checked only during local execution, and syntax is not separated
+from semantic errors.
 
 With `--execute`, saved candidates are compiled and run against a native driver.
 Local execution replaces any imported result. Execution is bounded by configured
 compiler/run deadlines and output size, but candidate machine code has native
 process privileges. Use an external isolation environment for untrusted input.
-Sanitizers are optional for this command and enabled in the compiler tests.
+With `--sanitize`, C candidates and the C result driver are instrumented. LM0
+assembly remains uninstrumented because the native compiler rejects sanitizer
+requests in version 0.2.
 
 ## Metrics and Comparison
 
@@ -88,5 +91,7 @@ original responses and model metadata alongside the report.
 
 These 20 tasks are a small evaluation fixture, not evidence of general LLM
 superiority. No real model responses or claimed performance improvement ship
-with the prototype. The Python result oracles are independent of LM0 execution;
-native LM0 and C sum candidates exercise the complete grading path in tests.
+with the prototype. Python is used only for benchmark orchestration and the
+independent result oracles; every LM0 candidate is checked and compiled by the
+native assembly executable. Native LM0 and C sum candidates exercise the
+complete grading path in tests.

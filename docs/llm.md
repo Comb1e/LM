@@ -31,9 +31,12 @@ by a replacement operation. Read `docs/instructions.md` for operand signatures.
    `lm0 build --kind shared` builds exported functions for a native host without
    requiring `main`. Match the host's ABI types and release LM0 allocations via
    an exported destructor. A native trap terminates the host process.
-10. Run `lm0 check` before building. For repairs, use diagnostic code, source
-    span, and function/block/register identifiers. Use `lm0 inspect` for required
-    context and `lm0 replace` for atomic, validated changes to parseable source.
+10. Build the native compiler with `make`, then run `build/lm0 check` before
+    building. The compiler is GNU x86-64 assembly and emits assembly; Python is
+    not part of compilation. For repairs, use diagnostic code, source span, and
+    function/block/register identifiers. Use `build/lm0 inspect` for required
+    context and `build/lm0 replace` for atomic, validated changes to parseable
+    source. Use only `-O0`; higher levels and `--sanitize` are currently rejected.
 11. Report suspected LM0 bugs, unclear diagnostics or documentation, and missing
     capabilities through the [issue-reporting workflow](reporting.md), including
     problems for which you found a workaround. Submit a minimal reproducer and

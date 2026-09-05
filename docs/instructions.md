@@ -2,7 +2,8 @@
 
 `%r:T =` denotes a required destination. `N` is an integer literal; all other
 numeric operands are registers. See the specification for exceptional cases.
-The compiler's shared registry is `lm0/ops.py`; `inspect` exposes its entries.
+The compiler's shared registry is `native/ops.inc`; `inspect` exposes its entries.
+`lm0/ops.py` is the legacy Python reference mirror used by tests.
 
 | Form | Type rule / behavior |
 | --- | --- |

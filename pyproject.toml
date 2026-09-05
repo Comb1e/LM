@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lm0-lang"
-version = "0.1.0"
-description = "Typed assembly for LLM generation and repair, compiled to native code"
+version = "0.2.0"
+description = "Optional benchmark and reference tools for the native LM0 compiler"
 requires-python = ">=3.11"
 license = "MIT"
 
 [project.scripts]
-lm0 = "lm0.cli:main"
+lm0-bench = "lm0.benchmark_cli:main"
 
 [tool.setuptools.package-data]
 lm0 = ["defaults.toml", "runtime.h"]

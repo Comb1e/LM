@@ -52,9 +52,9 @@ produce `u64` values. `field %pointer, name` returns a pointer to the field's
 declared type. Padding bytes have no defined initial value.
 
 The current target has eight-bit bytes, little-endian memory, natural scalar
-alignments, and 64-bit pointers. The compiler verifies the GCC target triple and
-emits ABI assertions. Changing the configured triple does not port the language
-to another architecture.
+alignments, and 64-bit pointers. The native assembly compiler verifies GCC's
+target triple before using it as an assembler/linker driver. Changing the
+configured triple does not port the language to another architecture.
 
 ## Functions and Control Flow
 
@@ -146,7 +146,7 @@ establish a valid allocation or lifetime.
   arithmetic stays within the allocation or one past it. Offset zero preserves
   the original pointer, including null.
 - `load` and `store` operate on a scalar of the pointer's exact element type.
-  They accept unaligned addresses and lower through `memcpy`. Memory must be
+  The x86-64 backend accepts unaligned addresses directly. Memory must be
   live, large enough, and initialized with a valid representation when read.
 - `copy %destination, %source, %bytes` copies a `u64` number of bytes. Positive
   counts require valid disjoint ranges. Zero counts perform no access and permit
@@ -154,7 +154,7 @@ establish a valid allocation or lifetime.
 - `move %destination, %source, %bytes` has the same pointer and count types as
   `copy`, but permits overlapping ranges. It behaves as if the source bytes were
   read into temporary storage before any destination bytes were written. Zero
-  counts perform no access and permit null pointers. It lowers to C `memmove`.
+  counts perform no access and permit null pointers. The backend calls `memmove`.
 
 There is no provenance tracker or bounds/lifetime verifier. Invalid memory
 operations, reads of uninitialized values, and invalid Boolean/pointer
@@ -194,22 +194,23 @@ objects can communicate through C exports/imports. Variadic functions, function
 pointers, callbacks, and aggregate-by-value signatures are not supported.
 
 `lm0 build --kind shared` produces a position-independent shared library without
-a `main` wrapper. Exported functions can be loaded by native hosts such as Python
-`ctypes`; internal functions and data remain private. Imports must resolve at
-link time through `--link` or `--library`. A sanitized library must be loaded by
-a host with a compatible sanitizer runtime initialized before the library.
-Traps still terminate the host process; they do not become foreign exceptions.
+a `main` wrapper. Exported functions can be loaded by native hosts; internal
+functions and data remain private. Imports must resolve at link time through
+`--link` or `--library`. Version 0.2 rejects sanitizer requests. Traps terminate
+the host process; they do not become foreign exceptions.
 
 ## Diagnostics and Limits
 
 Validation returns structured diagnostics with `code`, `phase`, `message`, source
 span, and available function/block/register identifiers. Type mismatches include
 `expected` and `actual`. Execution traps emit a JSON diagnostic to stderr and
-exit with status 70. Generated C includes `#line` mappings for compiler and
-sanitizer locations. There is no language-level call stack trace yet.
+exit with status 70. Generated assembly includes `.file` and `.loc` source
+mappings. There is no language-level call stack trace yet.
 
 Configuration bounds source size, nested types, aggregate allocation declarations,
-diagnostic count, compiler duration, process duration, and captured output.
+compiler duration, process duration, and captured output. The native compiler
+stops after its first diagnostic; `limits.diagnostics` remains accepted for
+configuration compatibility with the reference implementation.
 Heap allocations are bounded by native address space, not the static aggregate
 limit. There is no recursion-depth guard; native stack limits apply. Execution
 and compiler subprocess groups are terminated on time or output exhaustion.

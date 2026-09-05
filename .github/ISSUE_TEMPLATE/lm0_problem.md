@@ -11,11 +11,10 @@ documentation, or a missing capability. Link related issues if any.
 
 ## Environment
 
-- LM0 package version and/or checkout commit:
-- Python version:
-- Compiler version and target:
+- LM0 native compiler version and/or checkout commit:
+- GCC/binutils versions and target:
 - Operating system and architecture:
-- Relevant configuration, optimization, and sanitizer flags:
+- Relevant configuration and compiler flags:
 - Reporting agent/model and version, if known (optional):
 
 ## Reproducer

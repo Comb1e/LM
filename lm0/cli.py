@@ -1,3 +1,5 @@
+"""Legacy Python compiler retained only as a differential test reference."""
+
 import argparse
 from dataclasses import asdict
 import json

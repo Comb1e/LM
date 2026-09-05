@@ -9,6 +9,8 @@
 Read the [LLM generation contract](docs/llm.md) before writing LM0 programs.
 Use the [language specification](docs/spec.md) and
 [instruction reference](docs/instructions.md) to resolve syntax and semantics.
+Build the compiler with `make` and use `build/lm0`; do not use the Python
+reference frontend to compile LM0 programs.
 
 # Issue Reporting
 
@@ -20,4 +22,5 @@ Record the submitted issue URL in the task summary. If submission is unavailable
 preserve a local report and state **Not submitted**, with its path and the reason.
 
 # Validation
+Run `make smoke` for every native compiler change.
 Run `python3 -m unittest discover -s tests -v` before committing compiler changes.

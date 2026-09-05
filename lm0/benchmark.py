@@ -4,15 +4,14 @@ from collections import defaultdict
 from dataclasses import asdict
 import json
 import math
+import os
 from pathlib import Path
+import shutil
 import tempfile
 
 from .config import DEFAULTS
-from .emit import emit_c
-from .model import CompileError, Type
-from .parser import parse
+from .model import CompileError
 from .tooling import atomic_write, build_c, execute
-from .verify import verify
 
 
 TASKS = {
@@ -40,6 +39,58 @@ TASKS = {
 
 LM0_SIGNATURE = "export c fn @solve(%data:ptr<i64>, %n:u64, %key:i64) -> i64"
 C_SIGNATURE = "int64_t solve(void *data, uint64_t n, int64_t key)"
+
+
+class NativeCompilerError(Exception):
+    def __init__(self, diagnostics):
+        self.diagnostics = diagnostics
+        super().__init__("; ".join(item.get("message", "Native compiler failed") for item in diagnostics))
+
+
+def native_compiler() -> Path:
+    override = os.environ.get("LM0_NATIVE")
+    candidates = [Path(override)] if override else []
+    candidates.append(Path(__file__).resolve().parents[1] / "build" / "lm0")
+    installed = shutil.which("lm0")
+    if installed:
+        candidates.append(Path(installed))
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise ValueError("Native LM0 compiler not found; run `make` or set LM0_NATIVE")
+
+
+def native_call(arguments, config):
+    result = execute([str(native_compiler()), *map(str, arguments)],
+                     config["compiler"]["build_timeout_seconds"], config["limits"]["output_bytes"])
+    if result.timed_out or result.output_limited:
+        raise NativeCompilerError([{"code": "E_BACKEND_LIMIT", "phase": "backend",
+                                    "message": "Native compiler exceeded configured limits"}])
+    try:
+        message = json.loads(result.stdout)
+    except ValueError:
+        message = None
+    if result.exit_code or not isinstance(message, dict):
+        diagnostics = message.get("diagnostics", []) if isinstance(message, dict) else []
+        raise NativeCompilerError(diagnostics or [{"code": "E_TOOL", "phase": "tool",
+                                                    "message": result.stderr or "Native compiler failed"}])
+    return message
+
+
+def native_source(source, command, config):
+    with tempfile.TemporaryDirectory(prefix="lm0-benchmark-check-") as temporary:
+        path = Path(temporary) / "candidate.lm0"
+        path.write_text(source, encoding="utf-8")
+        return native_call([command, path, "--module"] if command == "inspect" else [command, path], config)
+
+
+def native_validation(source, config):
+    try:
+        native_source(source, "check", config)
+        return True, True, []
+    except NativeCompilerError as error:
+        parsed = not any(item.get("phase") == "parse" for item in error.diagnostics)
+        return parsed, False, error.diagnostics
 
 SUM_SOURCE = """module candidate version 1
 export c fn @solve(%data:ptr<i64>, %n:u64, %key:i64) -> i64 {
@@ -195,24 +246,28 @@ def driver(task):
 
 
 def execute_candidate(task, source, language, config, sanitize=False):
-    if language == "lm0":
-        module = verify(parse(source, "candidate.lm0", config), config)
-        try:
-            function = module.function("solve")
-        except StopIteration:
-            raise ValueError("Candidate must export solve")
-        if (not function.exported or function.returns != Type("i64") or
-                [p.type for p in function.params] != [Type("ptr", Type("i64")), Type("u64"), Type("i64")]):
-            raise ValueError("Candidate solve signature does not match task")
-        if any(f.external for f in module.functions):
-            raise ValueError("Benchmark candidates cannot import C functions")
-        source = emit_c(module, config=config)
     with tempfile.TemporaryDirectory(prefix="lm0-benchmark-") as temporary:
         root = Path(temporary)
         harness = root / "driver.c"
         harness.write_text(driver(task))
         executable = root / "candidate"
-        build_c(source, executable, links=[harness], sanitize=sanitize, config=config)
+        if language == "lm0":
+            candidate = root / "candidate.lm0"
+            candidate.write_text(source, encoding="utf-8")
+            info = native_call(["inspect", candidate, "--module"], config)
+            functions = info.get("functions", [])
+            solve = next((function for function in functions if function.get("name") == "solve"), None)
+            expected = ["ptr<i64>", "u64", "i64"]
+            if (not solve or not solve.get("exported") or solve.get("returns") != "i64" or
+                    [parameter.get("type") for parameter in solve.get("params", [])] != expected):
+                raise ValueError("Candidate solve signature does not match task")
+            if any(function.get("external") for function in functions):
+                raise ValueError("Benchmark candidates cannot import C functions")
+            object_ = root / "candidate.o"
+            native_call(["build", candidate, "--kind", "object", "-o", object_], config)
+            build_c(driver(task), executable, links=[object_], sanitize=sanitize, config=config)
+        else:
+            build_c(source, executable, links=[harness], sanitize=sanitize, config=config)
         result = execute([str(executable)], config["limits"]["run_timeout_seconds"], config["limits"]["output_bytes"])
     parsed = []
     if not result.timed_out and not result.output_limited and result.exit_code == 0:
@@ -267,11 +322,10 @@ def grade_responses(path: Path, execute_candidates=False, sanitize=False, config
                 "parsed": None, "verified": None, "correct": None, "diagnostics": []}
         try:
             if language == "lm0":
-                item["parsed"] = False
-                module = parse(source, "candidate.lm0", config)
-                item.update(parsed=True, verified=False)
-                verify(module, config)
-                item["verified"] = True
+                parsed, verified, diagnostics = native_validation(source, config)
+                item.update(parsed=parsed, verified=verified, diagnostics=diagnostics)
+                if not verified:
+                    raise NativeCompilerError(diagnostics)
             execution = row.get("execution")
             if execute_candidates:
                 execution = execute_candidate(task, source, language, config, sanitize)
@@ -293,6 +347,9 @@ def grade_responses(path: Path, execute_candidates=False, sanitize=False, config
                 item["execution"] = execution
         except CompileError as error:
             item["diagnostics"] = [d.json() for d in error.diagnostics]
+            item["correct"] = False
+        except NativeCompilerError as error:
+            item["diagnostics"] = error.diagnostics
             item["correct"] = False
         except (OSError, ValueError) as error:
             item["diagnostics"] = [{"code": "E_BENCH", "phase": "benchmark", "message": str(error)}]

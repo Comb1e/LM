@@ -22,28 +22,29 @@ evidence and does not make a report unnecessary.
    distinct filename for each problem. Omit the template's YAML front matter.
    Keep source and logs minimal and remove credentials and private project data.
 
-Include the LM0 version or checkout commit, Python and compiler versions,
-target, exact command and relevant configuration, minimal source and inputs,
+Include the LM0 version or checkout commit, native compiler and GCC/binutils
+versions, target, exact command and relevant configuration, minimal source and inputs,
 expected behavior, actual output/exit codes, and any workaround. For an ambiguous
 instruction or missing capability, explain the intended operation and identify
 the relevant documentation; a runnable reproducer may not apply.
 
 These commands collect version information without reading credentials. Run
-the Git command in the LM0 checkout, and use the Python/compiler executables
-that reproduced the problem:
+the Git command in the LM0 checkout, and use the native compiler and toolchain
+executables that reproduced the problem:
 
 ```sh
-python3 -c 'import lm0; print(lm0.__version__)'
+build/lm0 --version
 git rev-parse HEAD
-python3 --version
 gcc --version
 gcc -dumpmachine
+as --version
 ```
 
-Include LM0's JSON diagnostics, compiler/sanitizer stderr, and the process exit
+Include LM0's JSON diagnostics, assembler/linker stderr, and the process exit
 code when relevant. Do not replace actual output with an inferred explanation.
-For suspected optimization errors, record the results at `-O 0` and `-O 2` if
-available. Report which observations could not be collected.
+For suspected optimization errors, record every supported level tested and any
+`E_UNSUPPORTED` response for the requested level. Report which observations
+could not be collected.
 
 ## Submit Through GitHub
 
