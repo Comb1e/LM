@@ -1,4 +1,4 @@
-# LM0 Language Specification, Version 1
+# LM0 Language Specification, Versions 1 and 2
 
 ## Representation
 
@@ -6,18 +6,54 @@ Source is UTF-8. Identifiers match `[A-Za-z_][A-Za-z_0-9]*`; names are
 case-sensitive. `%name` identifies a register, `@name` a function or data symbol,
 and `^name` a block. Horizontal whitespace and `#` comments are insignificant.
 Newlines terminate declarations and instructions. Blank lines are allowed;
-indentation has no meaning. Files start with `module NAME version 1`.
+indentation has no meaning. New files start with `module NAME version 2`.
+Version 1 remains accepted with its original explicit syntax and scoping rules.
 
 Functions and data share a module-wide namespace. Struct types have a separate
 namespace and cannot redefine built-in types. Block names are unique within a
-function. Function parameters, block parameters, and instruction destinations
-share a function-wide register namespace; shadowing and redefinition are errors.
+function. In v2, block parameters and instruction destinations share a register
+namespace local to their block. Function parameters are visible in every block
+and cannot be shadowed. Redefinition within a block is an error. Version 1 instead
+requires every register name to be unique throughout its function.
 
 There are no expressions inside operands, overload declarations, macros,
-implicit casts, inferred register types, or alternative operator spellings.
+implicit casts, or alternative operator spellings.
 `%sum:i32 = add %left, %right` uses the operand/result types to select the
-instruction's numeric behavior. Literal operands require separate `const`
-instructions. Every non-void result must be assigned.
+instruction's numeric behavior. Every non-void result must be assigned.
+
+## V2 Contextual Types and Literals
+
+A destination may omit `:T` when its type follows from the instruction and local
+operands: `%sum = add %left, 1`. Function and block interfaces remain explicitly
+typed. This is local inference; subsequent uses never determine a destination's
+type, and no whole-function type unification or default numeric type is used.
+
+Any scalar/pointer register operand may instead be a literal. Write `1:i32`,
+`1.5:f64`, `true:bool`, or `null:ptr<i32>` for an explicit literal type. A bare
+literal uses the operand's required type; `true` and `false` establish `bool`
+without context. Numeric literals and null pointers otherwise have no default.
+
+- Arithmetic and unary operations use a typed operand or an explicit destination
+  to establish their common type. Comparisons use a typed operand to establish
+  operand types and produce `bool`. `%p = lt 1, 2` is ambiguous.
+- Calls, returns, and block arguments take their types from the declared
+  interface. Branch conditions are `bool`; pointer offsets are `i64`; heap and
+  byte-copy counts are `u64`.
+- `stack`/`alloc` infer `ptr<T>`, `field` infers the field pointer, `address`
+  infers `ptr<u8>`, and `sizeof`/`alignof`/`ptrtoint` infer `u64`.
+- `load` relates result T and operand `ptr<T>`; `store` relates `ptr<T>` and T.
+  Either established type can supply the other. `offset` relates the same base
+  and result pointer type. Other pointer operands need an established type:
+  use `free null:ptr<void>`; `free null` is ambiguous.
+- `cast`, `inttoptr`, and standalone `null` require a destination type. Numeric
+  `const` also requires one; Boolean `const` can infer `bool`. A cast's source
+  type is independent: `%x:f64 = cast 1:i32` is valid; `cast 1` is ambiguous.
+
+Explicit annotations must agree with these constraints. No annotation converts
+an operand. Literal range checks and runtime arithmetic behavior are unchanged.
+Ambiguity reports `E_INFER`; conflicts report `E_TYPE`. The native compiler
+normalizes literals into internal typed constants with original source spans.
+Version 1 requires destination types and separate constant/null instructions.
 
 ## Types and Layout
 
@@ -61,14 +97,12 @@ configured triple does not port the language to another architecture.
 ```text
 fn @count(%limit:u64) -> u64 {
 ^entry:
-    %zero:u64 = const 0
-    jump ^loop(%zero)
+    jump ^loop(0)
 ^loop(%index:u64):
-    %more:bool = lt %index, %limit
+    %more = lt %index, %limit
     branch %more, ^step(%index), ^done(%index)
 ^step(%previous:u64):
-    %one:u64 = const 1
-    %next:u64 = add %previous, %one
+    %next = add %previous, 1
     jump ^loop(%next)
 ^done(%result:u64):
     return %result
@@ -89,7 +123,7 @@ Only the selected branch executes. Effects occur in instruction order.
 
 Calls may refer to later functions, including mutual recursion. There are no
 indirect calls, closures, first-class functions, or tail-call guarantees.
-`return` takes one register for a scalar/pointer return or none for `void`.
+`return` takes one value for a scalar/pointer return or none for `void`.
 An executable requires an internal `fn @main() -> i32`; an object file does not.
 Normal process exit exposes the platform's low eight bits of main's return.
 
@@ -99,7 +133,7 @@ Integer literals are decimal or `0x` hexadecimal with an optional minus sign.
 They must lie within the declared type's range. Boolean literals are `true`
 and `false`. Float literals use decimal/exponent notation or `inf`, `-inf`,
 and `nan`. A finite literal that overflows its declared type is an error.
-`null` is a separate instruction for pointers.
+`null` is a separate instruction for pointers and a contextual operand in v2.
 
 For same-type integers, addition, subtraction, multiplication, and negation
 wrap modulo 2^width. Signed results reinterpret the resulting bit pattern as
@@ -196,7 +230,7 @@ pointers, callbacks, and aggregate-by-value signatures are not supported.
 `lm0 build --kind shared` produces a position-independent shared library without
 a `main` wrapper. Exported functions can be loaded by native hosts; internal
 functions and data remain private. Imports must resolve at link time through
-`--link` or `--library`. Version 0.2 rejects sanitizer requests. Traps terminate
+`--link` or `--library`. The native compiler rejects sanitizer requests. Traps terminate
 the host process; they do not become foreign exceptions.
 
 ## Diagnostics and Limits

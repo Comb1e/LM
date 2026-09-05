@@ -138,9 +138,18 @@ FUNC add_register
 .addreg_find:
  test r15, r15
  jz .addreg_new
+ cmp qword ptr [module_version], 2
+ jne .addreg_compare
+ mov rax, [r15+A]
+ test rax, rax
+ jz .addreg_compare
+ cmp rax, r13
+ jne .addreg_next
+.addreg_compare:
  C strcmp, "qword ptr [r15+NAME]", "qword ptr [r12+NAME]"
  test eax, eax
  jz .duplicate_error
+.addreg_next:
  mov r15, [r15+AUX]
  jmp .addreg_find
 .addreg_new:
@@ -161,9 +170,18 @@ FUNC resolve_reg
 .resolve_loop:
  test r13, r13
  jz .resolve_bad
+ cmp qword ptr [module_version], 2
+ jne .resolve_compare
+ mov rax, [r13+A]
+ test rax, rax
+ jz .resolve_compare
+ cmp rax, [cur_block]
+ jne .resolve_next
+.resolve_compare:
  C strcmp, "qword ptr [r13+NAME]", r12
  test eax, eax
  jz .resolve_found
+.resolve_next:
  mov r13, [r13+AUX]
  jmp .resolve_loop
 .resolve_found:
@@ -315,6 +333,15 @@ FUNC verify_instruction
  mov [cur_ins], r12
  mov rax, [r12+TOKEN]
  mov [diag_tok], rax
+ cmp qword ptr [module_version], 2
+ jne .verify_normalized
+ cmp qword ptr [r12+ALIGN], 0
+ jne .verify_normalized
+ C normalize_instruction, r12
+ mov [cur_ins], r12
+ mov rax, [r12+TOKEN]
+ mov [diag_tok], rax
+.verify_normalized:
  mov rbx, [r12+FLAGS]
  imul rax, rbx, 40
  mov r13, [ops+rax+24]
@@ -619,7 +646,10 @@ STR m_data, "Unknown static data"
 FUNC verify
  mov qword ptr [diag_phase], offset p_verify
  cmp qword ptr [module_version], 1
+ je .verify_version_ok
+ cmp qword ptr [module_version], 2
  jne .version_error
+.verify_version_ok:
  C unique_list, "qword ptr [functions]"
  C unique_list, "qword ptr [data_nodes]"
  mov r12, [data_nodes]

@@ -539,7 +539,69 @@ FUNC param
  C expect, "offset s_colon"
  C parse_type, 0
  mov [r13+TYPE], rax
+ mov rax, [last_tok]
+ mov [r13+END], rax
  mov rax, r13
+ RETURN
+
+FUNC destination
+ cmp qword ptr [module_version], 2
+ je .destination_v2
+ call param
+ RETURN
+.destination_v2:
+ call node
+ mov r12, rax
+ mov rax, [tok]
+ mov [r12+TOKEN], rax
+ C reference, 37
+ mov [r12+NAME], rax
+ C accept, "offset s_colon"
+ test eax, eax
+ jz .destination_end
+ C parse_type, 0
+ mov [r12+TYPE], rax
+.destination_end:
+ mov rax, [last_tok]
+ mov [r12+END], rax
+ mov rax, r12
+ RETURN
+
+# V2 operands retain literal spelling and span until contextual normalization.
+FUNC operand
+ cmp qword ptr [module_version], 2
+ je .operand_v2
+ C reference, 37
+ RETURN
+.operand_v2:
+ call node
+ mov r12, rax
+ mov rax, [tok]
+ mov [r12+TOKEN], rax
+ cmp qword ptr [rax+TK], K_REF
+ jne .operand_literal
+ C reference, 37
+ mov [r12+NAME], rax
+ jmp .operand_end
+.operand_literal:
+ cmp qword ptr [rax+TK], K_NUMBER
+ je .operand_take
+ cmp qword ptr [rax+TK], K_WORD
+ jne syntax_error
+.operand_take:
+ call take
+ mov rax, [rax+TX]
+ mov [r12+NAME], rax
+ mov qword ptr [r12+FLAGS], 1
+ C accept, "offset s_colon"
+ test eax, eax
+ jz .operand_end
+ C parse_type, 0
+ mov [r12+TYPE], rax
+.operand_end:
+ mov rax, [last_tok]
+ mov [r12+END], rax
+ mov rax, r12
  RETURN
 
 # Param lists and argument lists have the same next/name/type record shape.
@@ -568,10 +630,17 @@ FUNC arg_list
  test eax, eax
  jnz .args_done
 .args_loop:
+ cmp qword ptr [module_version], 2
+ je .args_v2
  call node
  mov r12, rax
  C reference, 37
  mov [r12+NAME], rax
+ jmp .args_append
+.args_v2:
+ call operand
+ mov r12, rax
+.args_append:
  lea rdi, [rbp-48]
  C append, rdi, r12
  C accept, "offset s_comma"
@@ -600,7 +669,7 @@ FUNC instruction
  mov rax, [rax+TX]
  cmp byte ptr [rax], 37
  jne .ins_opcode
- call param
+ call destination
  mov [r12+TYPE], rax
  C expect, "offset s_equal"
 .ins_opcode:
@@ -646,7 +715,7 @@ FUNC instruction
  je .ins_end
  cmp qword ptr [rax+TK], K_EOF
  je .ins_end
- C reference, 37
+ call operand
  mov [r12+A], rax
  jmp .ins_end
 .ins_literal:
@@ -663,7 +732,7 @@ FUNC instruction
 .ins_regs:
  xor ebx, ebx
 .ins_reg_loop:
- C reference, 37
+ call operand
  mov [r12+A+rbx*8], rax
  inc rbx
  mov rax, r13
@@ -690,11 +759,11 @@ FUNC instruction
  mov [r12+B], rax
  jmp .ins_end
 .ins_alloc:
- C reference, 37
+ call operand
  mov [r12+B], rax
  jmp .ins_end
 .ins_field:
- C reference, 37
+ call operand
  mov [r12+A], rax
  C expect, "offset s_comma"
  C take_kind, K_WORD
@@ -709,7 +778,7 @@ FUNC instruction
  mov [r12+A], rax
  jmp .ins_end
 .ins_branch:
- C reference, 37
+ call operand
  mov [r12+A], rax
  C expect, "offset s_comma"
  call parse_target

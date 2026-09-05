@@ -14,3 +14,12 @@ test "$status" -eq 42
 "$compiler" build examples/ffi.lm0 --kind object -o "$temporary/ffi.o"
 "$compiler" build examples/ffi.lm0 --kind shared -o "$temporary/ffi.so"
 "$compiler" inspect examples/linked_list.lm0 --function main --block entry
+"$compiler" run examples/v2/count.lm0
+"$compiler" describe add cast
+"$compiler" migrate examples/add.lm0 -o "$temporary/add.v2.lm0"
+"$compiler" inspect "$temporary/add.v2.lm0" --function main --block entry --view compact
+"$compiler" emit-asm "$temporary/add.v2.lm0" --entry -o "$temporary/add.v2.s"
+gcc "$temporary/add.v2.s" -o "$temporary/add.v2"
+status=0
+"$temporary/add.v2" || status=$?
+test "$status" -eq 42

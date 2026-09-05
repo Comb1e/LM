@@ -1,0 +1,12 @@
+[
+  {"id":"unknown_register","block":"step","v1":["add %accumulator, %value","add %missing, %value"],"v2":["add %accumulator, %value","add %missing, %value"]},
+  {"id":"wrong_type","block":"step","v1":["%one:u64 = const 1","%one:i64 = const 1"],"v2":["%added = add","%added:i32 = add"]},
+  {"id":"missing_terminator","block":"done","v1":["    return %result\n",""],"v2":["    return %result\n",""]},
+  {"id":"duplicate_register","block":"step","v1":["%value:i64 = load %pointer","%offset:i64 = load %pointer"],"v2":["%value = load %pointer","%offset:i64 = load %pointer"]},
+  {"id":"branch_arity","block":"loop","v1":["^done(%total)","^done()"],"v2":["^done(%total)","^done()"]},
+  {"id":"literal_range","block":"step","v1":["%one:u64 = const 1","%one:u64 = const -1"],"v2":["add %position, 1:u64","add %position, -1:u64"]},
+  {"id":"unknown_opcode","block":"step","v1":[" = add %accumulator"," = accumulate %accumulator"],"v2":[" = add %accumulator"," = accumulate %accumulator"]},
+  {"id":"pointer_index","block":"step","v1":["offset %data, %offset","offset %data, %position"],"v2":["offset %data, %offset","offset %data, %position"]},
+  {"id":"division_by_zero","block":"step","v1":["%added:i64 = add %accumulator, %value","%denominator:i64 = const 0\n    %added:i64 = div %value, %denominator"],"v2":["%added = add %accumulator, %value","%added = div %value, 0:i64"]},
+  {"id":"wrong_operation","block":"step","v1":["%added:i64 = add %accumulator, %value","%added:i64 = sub %accumulator, %value"],"v2":["%added = add %accumulator, %value","%added = sub %accumulator, %value"]}
+]

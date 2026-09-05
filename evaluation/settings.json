@@ -1,0 +1,11 @@
+{
+  "file_bytes": 16777216,
+  "output_bytes": 1048576,
+  "process_timeout_seconds": 30,
+  "run_timeout_seconds": 5,
+  "max_repairs": 3,
+  "compiler": "build/lm0",
+  "driver": "build/lm0-eval-driver",
+  "tasks": "evaluation/tasks.json",
+  "corpus": "evaluation/corpus.json"
+}

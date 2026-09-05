@@ -9,7 +9,9 @@ assemble and link executables, C-linkable objects, or shared libraries.
 The design targets reliable generation by existing LLMs. Its advantage over C
 is a hypothesis, not an established benchmark result. Explicit dependencies,
 a small instruction vocabulary, and machine-readable errors are the main
-design choices. Source readability and minimum character count are not goals.
+design choices. Version 2 reduces repeated types and constant temporaries and
+adds compact repair context. Token efficiency is measured with a named tokenizer;
+source character counts alone do not establish an LLM advantage.
 
 ## Build and Run
 
@@ -20,6 +22,7 @@ not used to build or run the compiler and is not part of LM0 compilation.
 make
 ./build/lm0 check examples/add.lm0
 ./build/lm0 run examples/add.lm0
+./build/lm0 run examples/v2/count.lm0
 ./build/lm0 build examples/strings.lm0 -o build/strings
 ./build/strings
 ```
@@ -36,31 +39,31 @@ sudo make install
 lm0 run examples/linked_list.lm0
 ```
 
-Version 0.2 supports `-O0`. Higher optimization levels and `--sanitize` are
+Version 0.3 supports `-O0`. Higher optimization levels and `--sanitize` are
 rejected with `E_UNSUPPORTED`; native optimization and sanitizer instrumentation
 remain future backend work.
 
 ## Language
 
 ```text
-module example version 1
+module example version 2
 
 fn @add(%a:i32, %b:i32) -> i32 {
 ^entry:
-    %sum:i32 = add %a, %b
+    %sum = add %a, %b
     return %sum
 }
 
 fn @main() -> i32 {
 ^entry:
-    %a:i32 = const 20
-    %b:i32 = const 22
-    %result:i32 = call @add(%a, %b)
+    %result = call @add(20, 22)
     return %result
 }
 ```
 
-- Registers have one definition; operands are registers, not nested expressions.
+- Registers have one definition within each block; other blocks can reuse names.
+- Result types can be inferred locally; operands are registers or typed/contextual
+  literals. Function and block interfaces remain explicit. There are no implicit casts.
 - Block parameters carry values between blocks, including loop iterations.
 - Integers have explicit width and signedness. Arithmetic wraps; invalid integer
   division and shifts trap. Conversions are explicit.
@@ -99,8 +102,10 @@ GitHub submission commands, a report template, and an offline fallback.
 
 ```sh
 lm0 emit-asm examples/array_sum.lm0 --entry -o build/array_sum.s
-lm0 inspect examples/array_sum.lm0 --function sum --block step
-lm0 replace program.lm0 --function sum --block step --replacement step.txt -o repaired.lm0
+lm0 describe add offset cast
+lm0 migrate examples/array_sum.lm0 -o build/array_sum.v2.lm0
+lm0 inspect build/array_sum.v2.lm0 --function sum --block step --view compact
+lm0 replace program.lm0 --function sum --block step --replacement step.txt --expect-revision HASH -o repaired.lm0
 lm0 build examples/ffi.lm0 --kind object -o build/ffi.o
 lm0 build examples/ffi.lm0 --kind shared -o build/ffi.so
 gcc examples/ffi_driver.c build/ffi.o -o build/ffi-demo
@@ -111,6 +116,13 @@ gcc examples/ffi_driver.c build/ffi.o -o build/ffi-demo
 function or block, and checks the whole resulting module before writing. It can
 repair a module that fails semantic checking. Syntax errors can be repaired by
 editing source or supplying a complete corrected module.
+
+Use the inspection's `revision` for HASH. A mismatch returns `E_STALE` without
+writing. Compact inspection supplies selected source, dependency signatures,
+incoming edges, and validation status; it works on parseable invalid modules.
+Read `validation` and `unresolved` before relying on the context. The default
+full view includes instruction descriptions and data contents. Version 1 remains
+accepted; migration preserves names and validates output before writing.
 
 `check`, `build`, `run`, `inspect`, and `replace` produce JSON on stdout. Compiler
 and tool failures exit with status `2`; `run` exits with `3` on a trap, signal,
@@ -123,7 +135,28 @@ selected values with `lm0 --config settings.toml ...`. Build and run outputs are
 bounded; `run --timeout SECONDS` overrides the execution deadline. `--link FILE`
 and `--library NAME` add native link inputs. Only `-O0` is currently accepted.
 
-## Evaluation
+## Offline V2 Evaluation
+
+The new evaluator is C, with `json-c` as its only additional library. The
+compiler continues to require only libc and the native toolchain.
+
+```sh
+make eval
+build/lm0-eval export build/evaluation
+build/lm0-eval report build/evaluation -o build/evaluation-report.json
+```
+
+Exports contain paired v1/v2 examples, 20 generation tasks, 10 repair tasks,
+language guidance, context, and replacement texts. Supply saved attempts at
+export with `--attempts attempts.json`; `report --execute` compiles them with
+the native compiler and checks return values and array mutations in a C driver.
+`report --counts counts.json` imports actual tokenizer measurements bound to
+artifact SHA-256 hashes. Missing token counts remain unknown. See the
+[protocol and formats](docs/evaluation.md).
+The [initial measurements](docs/experience/v2.md) show 18.3% fewer source bytes
+across eight examples; real token savings and model accuracy remain unmeasured.
+
+## Legacy Evaluation
 
 ```sh
 python3 -m pip install -e . --no-build-isolation
@@ -144,6 +177,7 @@ compilation. See
 
 ```sh
 make smoke
+make eval
 make test
 ```
 

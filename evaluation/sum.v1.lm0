@@ -1,0 +1,20 @@
+module candidate version 1
+export c fn @solve(%data:ptr<i64>, %n:u64, %key:i64) -> i64 {
+^entry:
+    %zero:u64 = const 0
+    %initial:i64 = const 0
+    jump ^loop(%zero, %initial)
+^loop(%index:u64, %total:i64):
+    %more:bool = lt %index, %n
+    branch %more, ^step(%index, %total), ^done(%total)
+^step(%position:u64, %accumulator:i64):
+    %offset:i64 = cast %position
+    %pointer:ptr<i64> = offset %data, %offset
+    %value:i64 = load %pointer
+    %added:i64 = add %accumulator, %value
+    %one:u64 = const 1
+    %next:u64 = add %position, %one
+    jump ^loop(%next, %added)
+^done(%result:i64):
+    return %result
+}

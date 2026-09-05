@@ -3,6 +3,9 @@
 .include "native/ops.inc"
 .include "native/frontend.s"
 .include "native/verify.s"
+.include "native/normalize.s"
+.include "native/hash.s"
 .include "native/backend.s"
 .include "native/tooling.s"
+.include "native/migrate.s"
 .section .note.GNU-stack,"",@progbits

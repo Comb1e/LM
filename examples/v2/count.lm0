@@ -1,0 +1,21 @@
+module count version 2
+
+fn @count(%n:u64) -> u64 {
+^entry:
+    jump ^loop(0)
+^loop(%i:u64):
+    %more = lt %i, %n
+    branch %more, ^step(%i), ^done(%i)
+^step(%i:u64):
+    %next = add %i, 1
+    jump ^loop(%next)
+^done(%i:u64):
+    return %i
+}
+
+fn @main() -> i32 {
+^entry:
+    %result = call @count(42)
+    %exit:i32 = cast %result
+    return %exit
+}

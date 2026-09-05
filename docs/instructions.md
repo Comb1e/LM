@@ -1,8 +1,11 @@
 # Instruction Reference
 
-`%r:T =` denotes a required destination. `N` is an integer literal; all other
-numeric operands are registers. See the specification for exceptional cases.
-The compiler's shared registry is `native/ops.inc`; `inspect` exposes its entries.
+`%r:T =` denotes a destination and its resulting type. In v2, omit `:T` when
+locally inferable and replace register operands with contextual literals or
+typed literals such as `1:i32`. `N` is a positive integer literal. The explicit
+forms below also remain valid in v1. See the specification for inference rules.
+The shared registry is `native/ops.inc`; `build/lm0 describe OP...` exposes its
+entries and contextual type constraints without loading a source module.
 `lm0/ops.py` is the legacy Python reference mirror used by tests.
 
 | Form | Type rule / behavior |

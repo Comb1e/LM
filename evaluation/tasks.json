@@ -1,0 +1,22 @@
+{
+  "sum":"Return the wrapping sum of all elements; empty input returns 0.",
+  "product":"Return the wrapping product of all elements; empty input returns 1.",
+  "minimum":"Return the smallest signed element; empty input returns 0.",
+  "maximum":"Return the largest signed element; empty input returns 0.",
+  "count_equal":"Return the number of elements equal to key.",
+  "index_of":"Return the first index whose element equals key, or -1 if absent.",
+  "count_positive":"Return the number of strictly positive elements.",
+  "is_sorted":"Return 1 if elements are in nondecreasing signed order, otherwise 0.",
+  "is_palindrome":"Return 1 if elements equal their reversal, otherwise 0.",
+  "sum_squares":"Return the wrapping sum of the wrapping squares of all elements.",
+  "xor_reduce":"Return the bitwise XOR of all elements as i64; empty input returns 0.",
+  "gcd":"Return gcd(abs(data[0]), abs(data[1])); fewer than two elements return 0. Inputs exclude INT64_MIN.",
+  "factorial":"Return key! with wrapping multiplication. key is in [0, 25]. Ignore data.",
+  "fibonacci":"Return Fibonacci(key), where F(0)=0 and F(1)=1, with wrapping addition. key is in [0, 100].",
+  "popcount":"Return the number of set bits in the 64-bit representation of key. Ignore data.",
+  "clamp_sum":"Clamp each element to [-key, key] and return their wrapping sum. key is nonnegative.",
+  "binary_search":"Input is sorted. Return the first index equal to key, or -1 if absent, using binary search.",
+  "reverse":"Reverse the elements in place and return n.",
+  "sort":"Sort elements in nondecreasing signed order in place and return n.",
+  "prefix_sum":"Replace each element by the wrapping sum through that index; return the final sum, or 0 when empty."
+}

@@ -1,6 +1,6 @@
 # Native LM0 Compiler
 
-LM0 0.2's supported compiler is an x86-64 System V executable written in GNU
+LM0 0.3's supported compiler is an x86-64 System V executable written in GNU
 assembly. It parses, verifies, inspects, repairs, and lowers LM0 without Python or
 generated C. Its output is GNU assembly; GCC is invoked as the assembler/linker
 driver and verifies the configured `x86_64-linux-gnu` target first.
@@ -25,6 +25,10 @@ command; `lm0-bench` invokes the native executable for LM0 candidates.
 
 - `frontend.s` tokenizes UTF-8 source and builds arena-owned module records.
 - `verify.s` resolves symbols/registers and computes System V storage layouts.
+- `normalize.s` infers v2 types and lowers literal operands into typed constants.
+  Internal register records retain block ownership and original source spans.
+- `migrate.s` applies token-span edits and validates canonical v2 output.
+  `hash.s` implements SHA-256, shared with the optional C evaluator.
 - `backend.s` assigns virtual registers to frame slots and emits position-independent
   assembly, direct control flow, ABI calls, and runtime trap thunks.
 - `tooling.s`, `process.s`, and `inspect.s` implement configuration, atomic output,
@@ -40,7 +44,7 @@ temporary frame area to preserve simultaneous assignment.
 ## Current Limits
 
 Only `-O0` is accepted. `-O1`, `-O2`, `-O3`, `-Os`, and `--sanitize` return a
-structured `E_UNSUPPORTED` diagnostic. Version 0.2 targets x86-64 Linux with
+structured `E_UNSUPPORTED` diagnostic. Version 0.3 targets x86-64 Linux with
 glibc and GNU binutils. The compiler reports the first source diagnostic and
 keeps the existing configuration field for diagnostic-count compatibility.
 

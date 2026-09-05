@@ -217,6 +217,8 @@ diag_phase: .zero 8
 diag_reg: .zero 8
 diag_expected: .zero 8
 diag_actual: .zero 8
+diagnostic_capture: .zero 8
+diagnostic_jump: .zero 256
 cur_fn: .zero 8
 cur_block: .zero 8
 cur_ins: .zero 8
@@ -374,6 +376,8 @@ FUNC fail
  mov r12, rdi
  mov r13, rsi
  mov rax, [stdout]
+ cmp qword ptr [diagnostic_capture],0
+ cmovne rax,[diagnostic_capture]
  mov [jout], rax
  C text_out, "offset j_start"
  C json_string, r12
@@ -423,6 +427,10 @@ FUNC fail
  C fprintf, "qword ptr [jout]", "offset j_location", "qword ptr [r14+TL]", "qword ptr [r14+TC]", "qword ptr [r14+TEL]", "qword ptr [r14+TEC]"
 .fail_end:
  C text_out, "offset j_end"
+ cmp qword ptr [diagnostic_capture],0
+ je .fail_exit
+ C longjmp, "offset diagnostic_jump", 1
+.fail_exit:
  C exit, 2
 
 # Read a bounded file into an arena buffer, returning buffer/length in rax/rdx.

@@ -319,6 +319,14 @@ STR a_cast_u64, "comisd xmm0,QWORD PTR [rip+.Lminusone]\njbe .Ltrap%lu\ncomisd x
 
 FUNC emit_instruction
  mov r12, rdi
+ mov r13, [r12+AUX]
+.emit_literal_loop:
+ test r13, r13
+ jz .emit_literals_done
+ C emit_instruction, r13
+ mov r13, [r13+NEXT]
+ jmp .emit_literal_loop
+.emit_literals_done:
  mov [cur_ins], r12
  mov r13, [r12+FLAGS]
  mov r14, [builtin+TY_VOID*8]

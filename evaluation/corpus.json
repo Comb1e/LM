@@ -1,0 +1,10 @@
+[
+  {"id":"add", "path":"examples/add.lm0", "function":"add", "block":"entry"},
+  {"id":"array_sum", "path":"examples/array_sum.lm0", "function":"sum", "block":"step"},
+  {"id":"binary_search", "path":"examples/binary_search.lm0", "function":"search", "block":"entry"},
+  {"id":"sort", "path":"examples/sort.lm0", "function":"sort", "block":"entry"},
+  {"id":"linked_list", "path":"examples/linked_list.lm0", "function":"sum_nodes", "block":"loop"},
+  {"id":"ffi", "path":"examples/ffi.lm0", "function":"twice", "block":"entry"},
+  {"id":"strings", "path":"examples/strings.lm0", "function":"main", "block":"entry"},
+  {"id":"snake", "path":"examples/snake/engine.lm0", "function":"place_food", "block":"advance"}
+]

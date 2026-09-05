@@ -1,5 +1,9 @@
 # Offline Benchmark Protocol
 
+This page documents the legacy Python orchestrator. For Python-free v1/v2
+artifact comparisons, hashed token imports, and native execution of saved
+attempts, use the [C evaluation protocol](evaluation.md).
+
 The benchmark tests generation and repair, without contacting a model service.
 Export prompts and separate evaluation cases:
 

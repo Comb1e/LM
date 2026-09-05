@@ -88,6 +88,43 @@ OP 37, branch, S_BRANCH, 0, R_BRANCH, 1
 OP 38, return, S_RETURN, 0, R_RETURN, 1
 OP 39, trap, S_NONE, 0, R_TRAP, 1
 .equ OP_COUNT, 40
+# Contextual normalization handlers, indexed by the shared semantic rule.
+.section .rodata
+normalizers:
+.quad norm_required,norm_required,norm_same,norm_same,norm_same,norm_same
+.quad norm_same,norm_same,norm_cast,norm_p2i,norm_i2p,norm_call
+.quad norm_stack,norm_alloc,norm_free,norm_offset,norm_field,norm_load
+.quad norm_store,norm_copy,norm_u64_result,norm_address,norm_jump,norm_branch
+.quad norm_return,norm_none
+STR infer_const,"Destination type required, except true/false infer bool"
+STR infer_null,"Destination pointer type required"
+STR infer_same,"Operands have one exact type, selected by typed operand or destination; result has that type"
+STR infer_compare,"Operands have one exact type, selected by a typed operand; result is bool"
+STR infer_cast,"Destination type required; source literal needs its own type"
+STR infer_p2i,"Operand needs a pointer type; result is u64"
+STR infer_i2p,"Operand is u64; destination pointer type required"
+STR infer_call,"Argument and result types come from the function signature"
+STR infer_stack,"Result is ptr<T>; count is a positive integer literal"
+STR infer_alloc,"Result is ptr<T>; count is u64"
+STR infer_free,"Operand needs an explicit or previously established pointer type"
+STR infer_offset,"Base and result have the same pointer type; index is i64"
+STR infer_field,"Base needs ptr<Struct>; result is pointer to the named field type"
+STR infer_load,"Operand is ptr<T>; result is T; either type can establish the other"
+STR infer_store,"Operands are ptr<T> and T; either type can establish the other"
+STR infer_copy,"Pointer operands need established types; byte count is u64"
+STR infer_size,"Result is u64"
+STR infer_address,"Result is ptr<u8>"
+STR infer_jump,"Argument types come from the target block parameters"
+STR infer_branch,"Condition is bool; argument types come from each target block"
+STR infer_return,"Operand type comes from the function return type; absent for void"
+STR infer_none,"No operands or result"
+.section .rodata
+inference_descriptions:
+.quad infer_const,infer_null,infer_same,infer_same,infer_compare,infer_compare
+.quad infer_same,infer_same,infer_cast,infer_p2i,infer_i2p,infer_call
+.quad infer_stack,infer_alloc,infer_free,infer_offset,infer_field,infer_load
+.quad infer_store,infer_copy,infer_size,infer_address,infer_jump,infer_branch
+.quad infer_return,infer_none
 .section .rodata
 STR op_desc_const, "Typed scalar literal"
 STR op_desc_null, "Null pointer"

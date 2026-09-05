@@ -28,6 +28,10 @@ GLOBAL cli_timeout_ms
 GLOBAL cli_links
 GLOBAL cli_libraries
 GLOBAL cli_optimization
+GLOBAL cli_view
+GLOBAL cli_revision
+GLOBAL cli_describe_ops
+GLOBAL compact_view
 GLOBAL temp_directory
 GLOBAL temp_assembly
 GLOBAL temp_binary
@@ -239,6 +243,8 @@ OPTION --function,cli_function
 OPTION --block,cli_block
 OPTION --replacement,cli_replacement
 OPTION --optimization,cli_optimization
+OPTION --view,cli_view
+OPTION --expect-revision,cli_revision
 .text
 option_value:
  inc r12
@@ -271,7 +277,7 @@ FUNC main
  test eax,eax
  jz .cli_set_option
  inc rbx
- cmp rbx,7
+ cmp rbx,9
  jb .cli_option_scan
  EQ r15, opt_version
  jz .cli_version
@@ -299,6 +305,8 @@ FUNC main
  je usage_error
  cmp qword ptr [cli_command],0
  je .cli_command_arg
+ EQ "qword ptr [cli_command]",cmd_describe
+ jz .cli_describe_arg
  cmp qword ptr [filename],0
  jne usage_error
  mov [filename],r15
@@ -361,6 +369,11 @@ FUNC main
  call node
  mov [rax+NAME],r15
  C append, rbx, rax
+ jmp .cli_next
+.cli_describe_arg:
+ call node
+ mov [rax+NAME],r15
+ C append, "offset cli_describe_ops", rax
 .cli_next:
  inc r12
  jmp .cli_args
@@ -370,6 +383,14 @@ FUNC main
  C read_file, "qword ptr [cli_config]", 1048576
  C load_config_text, rax
 .cli_configured:
+ cmp qword ptr [cli_view],0
+ je .cli_view_ready
+ EQ "qword ptr [cli_view]",view_full
+ jz .cli_view_ready
+ EQ "qword ptr [cli_view]",view_compact
+ jnz usage_error
+ mov qword ptr [compact_view],1
+.cli_view_ready:
  mov rax,[cli_optimization]
  test rax,rax
  jnz .cli_have_opt
@@ -404,6 +425,8 @@ FUNC main
  cmp qword ptr [cli_command],0
  je usage_error
  mov r12,[cli_command]
+ EQ r12,cmd_describe
+ jz .cli_describe
  EQ r12, cmd_emit_c
  jz unsupported_error
  EQ r12, cmd_bench
@@ -416,7 +439,16 @@ FUNC main
  call parse_module
  EQ r12, cmd_replace
  jz .cli_replace
+ EQ r12,cmd_inspect
+ jnz .cli_verify
+ cmp qword ptr [compact_view],0
+ je .cli_verify
+ call inspect_validation
+ jmp .cli_inspect
+.cli_verify:
  call verify
+ EQ r12,cmd_migrate
+ jz .cli_migrate
  EQ r12, cmd_check
  jz .cli_check
  EQ r12, cmd_inspect
@@ -437,6 +469,15 @@ FUNC main
  RETURN
 .cli_inspect:
  call inspect_module
+ xor eax,eax
+ RETURN
+.cli_migrate:
+ call migrate_source
+ call print_output
+ xor eax,eax
+ RETURN
+.cli_describe:
+ call describe_ops
  xor eax,eax
  RETURN
 .cli_replace:
@@ -513,8 +554,8 @@ unsupported_error:
  FAIL e_unsupported, m_unsupported
 .target_error:
  FAIL e_target, m_target
-STR version_text, "LM0 0.2.0 native x86_64-linux-gnu"
-STR help_text, "lm0 [--config FILE] check|emit-asm|build|run|inspect|replace SOURCE [OPTIONS]\nOutput: -o FILE; build: --kind exe|object|shared -O0 --link FILE --library NAME\nInspection: --function NAME [--block NAME] or --module\nRepair: --function NAME [--block NAME] --replacement FILE -o FILE\nEmission: --entry; execution: --timeout SECONDS\nOnly -O0 is supported. emit-c, bench and --sanitize are unavailable."
+STR version_text, "LM0 0.3.0 native x86_64-linux-gnu"
+STR help_text, "lm0 [--config FILE] check|emit-asm|build|run|inspect|replace|migrate SOURCE [OPTIONS]\nOutput: -o FILE; build: --kind exe|object|shared -O0 --link FILE --library NAME\nInspection: --function NAME [--block NAME] or --module; --view compact|full\nRepair: --function NAME [--block NAME] --replacement FILE -o FILE [--expect-revision SHA256]\nMigration: migrate SOURCE -o FILE; instruction guidance: describe OP...\nEmission: --entry; execution: --timeout SECONDS\nOnly -O0 is supported. emit-c, bench and --sanitize are unavailable."
 STR m_usage, "Invalid command arguments; use lm0 --help"
 STR m_unsupported, "Native compiler supports assembly emission and -O0 only; emit-c, bench and --sanitize are unavailable"
 STR m_target, "Unsupported compiler target"
@@ -541,6 +582,10 @@ STR cmd_build, "build"
 STR cmd_run, "run"
 STR cmd_inspect, "inspect"
 STR cmd_replace, "replace"
+STR cmd_migrate, "migrate"
+STR cmd_describe, "describe"
+STR view_full,"full"
+STR view_compact,"compact"
 STR j_check, "{\"ok\":true,\"module\":"
 STR j_check_end, ",\"functions\":%lu,\"diagnostics\":[]}\n"
 STR j_output, "{\"ok\":true,\"output\":"
