@@ -214,7 +214,9 @@ int main(void) {
         with self.assertRaises(ValueError):
             store.access(first["id"], {"action": "reset", "speed": True})
         self.assertEqual(store.access(first["id"]), reset)
-        store.sessions[first["id"]] = replace(store.sessions[first["id"]], touched=0)
+        session = store.sessions[first["id"]]
+        expired = session.touched - self.settings["server"]["session_ttl_seconds"] - 1
+        store.sessions[first["id"]] = replace(session, touched=expired)
         with self.assertRaises(KeyError):
             store.access(first["id"])
         constrained = {**self.settings, "server": {**self.settings["server"], "max_sessions": 1}}
