@@ -1,4 +1,7 @@
-# LM0 Language Specification, Versions 1 and 2
+# LM0 Language Specification
+
+New V3 programs use the [V3 source specification](v3.md). The sections below
+define the V1/V2 core and numeric, memory and native semantics reused by V3.
 
 ## Representation
 

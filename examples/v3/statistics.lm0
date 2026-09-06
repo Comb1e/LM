@@ -1,0 +1,68 @@
+module statistics version 3
+use std_vec
+use std_random
+use std_text
+use std_math
+use std_io
+data sum_name = "sum="
+data median_name = "upper_median="
+
+fn sample(vec:ptr<StdVec>) -> i32:
+    rng = stack<StdRng>(1)
+    value = stack<u64>(1)
+    std_random_seed(rng, 1)
+    for i in range(100):
+        status = std_random_bounded(rng, 1000, value)
+        if status == 0:
+            status = std_vec_push(vec, cast<i64>(load(value)))
+        if status != 0:
+            return status
+    return 0
+
+fn line(buf:ptr<StdBuf>, name:ptr<u8>, size:u64, value:i64) -> i32:
+    status = std_bytes_append(buf, name, size)
+    if status == 0:
+        status = std_text_format_i64(value, buf)
+    if status == 0:
+        status = std_bytes_push(buf, 10)
+    return status
+
+fn summarize(vec:ptr<StdVec>, buf:ptr<StdBuf>) -> i32:
+    value = stack<i64>(1)
+    sum = stack<i64>(1)
+    data = stack<ptr<u8>>(1)
+    size = stack<u64>(1)
+    store(sum, 0)
+    n = std_vec_len(vec)
+    for i in range(cast<i64>(n)):
+        status = std_vec_get(vec, cast<u64>(i), value)
+        if status == 0:
+            status = std_math_add_i64(load(sum), load(value), sum)
+        if status != 0:
+            return status
+    status = line(buf, address(sum_name), 4, load(sum))
+    if status == 0:
+        std_vec_sort(vec)
+        status = std_vec_get(vec, n // 2, value)
+    if status == 0:
+        status = line(buf, address(median_name), 13, load(value))
+    if status == 0:
+        std_bytes_view(buf, data, size)
+        status = std_io_stdout(load(data), load(size))
+    return status
+
+fn main() -> i32:
+    vec = stack<ptr<StdVec>>(1)
+    buf = stack<ptr<StdBuf>>(1)
+    store(vec, null)
+    store(buf, null)
+    status = std_vec_new(vec)
+    if status == 0:
+        status = std_bytes_new(buf)
+    if status == 0:
+        status = sample(load(vec))
+    if status == 0:
+        status = summarize(load(vec), load(buf))
+    std_vec_destroy(load(vec))
+    std_bytes_destroy(load(buf))
+    return status

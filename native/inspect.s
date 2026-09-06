@@ -1,5 +1,10 @@
 .text
 FUNC select_source
+ cmp qword ptr [v3_active],0
+ je .select_v3_ok
+ cmp qword ptr [cli_block],0
+ jne .v3_block_error
+.select_v3_ok:
  cmp qword ptr [cli_function],0
  je usage_error
  C find, "qword ptr [functions]", "qword ptr [cli_function]"
@@ -52,6 +57,11 @@ FUNC json_params
 
 FUNC json_signature
  mov r12,rdi
+ call v3_signature
+ test eax,eax
+ jnz .signature_done
+ mov rdi,r12
+ mov r12,rdi
  C text_out, "offset j_name"
  C json_string, "qword ptr [r12+NAME]"
  C text_out, "offset j_params"
@@ -70,6 +80,7 @@ FUNC json_signature
  sete dil
  call json_bool
  C text_out, "offset s_rbrace"
+.signature_done:
  RETURN
 STR j_name, "{\"name\":"
 STR j_type, ",\"type\":"
@@ -135,7 +146,12 @@ FUNC require_params
 FUNC inspect_module
  C text_out, "offset j_check"
  C json_string, "qword ptr [module_name]"
- C fprintf, "qword ptr [jout]", "offset j_inspect_version", "qword ptr [module_version]"
+ mov rax,[module_version]
+ cmp qword ptr [v3_active],0
+ je .inspect_version_ready
+ mov eax,3
+.inspect_version_ready:
+ C fprintf, "qword ptr [jout]", "offset j_inspect_version",rax
  call json_revision
  cmp qword ptr [compact_view],0
  je .inspect_validation_done
@@ -252,12 +268,19 @@ FUNC inspect_module
  mov r14,[r14+NEXT]
  jmp .inspect_scan_blocks
 .inspect_blocks_output:
+ call v3_dependencies
+ cmp qword ptr [v3_active],0
+ jne .inspect_no_incoming
  cmp qword ptr [compact_view],0
  je .inspect_no_incoming
  call inspect_incoming
 .inspect_no_incoming:
  C text_out, "offset j_blocks"
  mov r14,[r13+BODY]
+ cmp qword ptr [v3_active],0
+ je .inspect_v3_blocks_done
+ xor r14d,r14d
+.inspect_v3_blocks_done:
  xor r15d,r15d
 .inspect_blocks:
  test r14,r14
@@ -542,6 +565,7 @@ FUNC inspection_target
  RETURN
 
 FUNC inspect_unresolved
+ call v3_unresolved
  mov r12,[types]
 .inspect_missing_types:
  test r12,r12
@@ -690,6 +714,11 @@ rule_names: .quad word_constant,word_null,word_numeric,word_integer,word_equalit
 .text
 
 FUNC replace_source
+ cmp qword ptr [v3_active],0
+ je .replace_legacy
+ call v3_replace
+ RETURN
+.replace_legacy:
  cmp qword ptr [cli_output],0
  je usage_error
  cmp qword ptr [cli_replacement],0
@@ -858,3 +887,6 @@ replace_error:
 STR m_replace, "Replacement must contain exactly the selected declaration and preserve declaration identities"
 STR fragment_function, "module fragment version %lu\n%s\n"
 STR fragment_block, "module fragment version %lu\nfn @fragment() -> void {\n%s\n}\n"
+.v3_block_error:
+ FAIL e_unsupported,v3_block_message
+STR v3_block_message,"V3 repair selects a function; generated blocks are internal"

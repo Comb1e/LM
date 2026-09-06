@@ -1,5 +1,9 @@
 # LM0 Standard Library
 
+V3 uses the same catalogue and ownership/status contracts. Add `--syntax v3` to
+`library describe` for direct-call examples without sigils. Its default remains
+V2; V3 compact inspection selects matching templates automatically.
+
 LM0 0.5 includes thirteen native modules and 114 public functions. Use the catalogue to
 find an operation, obtain its exact signature and contract, then import its module:
 

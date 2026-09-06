@@ -36,6 +36,8 @@ FUNC migration_edit
 STR m_migration_overlap,"Overlapping migration edits"
 
 FUNC migrate_source
+ cmp qword ptr [v3_active],0
+ jne unsupported_error
  cmp qword ptr [cli_output],0
  je usage_error
  mov qword ptr [migration_edits],0

@@ -862,6 +862,7 @@ FUNC parse_function
  RETURN
 
 FUNC parse_module
+ call v3_prepare
  mov qword ptr [library_used],0
  mov qword ptr [library_importing],0
  mov qword ptr [functions], 0
@@ -869,6 +870,7 @@ FUNC parse_module
  mov qword ptr [data_nodes], 0
  call init_types
  call lex
+ call v3_finish_lex
  call lines
  C expect, "offset s_module"
  C take_kind, K_WORD

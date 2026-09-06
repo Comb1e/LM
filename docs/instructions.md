@@ -1,5 +1,8 @@
 # Instruction Reference
 
+This is the V1/V2 core table. V3 expressions and structured control flow lower
+to these operations; see [V3 syntax and operation mappings](v3.md).
+
 `%r:T =` denotes a destination and its resulting type. In v2, omit `:T` when
 locally inferable and replace register operands with contextual literals or
 typed literals such as `1:i32`. `N` is a positive integer literal. The explicit

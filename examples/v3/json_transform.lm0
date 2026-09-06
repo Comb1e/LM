@@ -1,0 +1,60 @@
+module json_transform version 3
+use std_json
+use std_io
+use std_math
+data input_path = "examples/stdlib/input.json"
+data output_path = "build/stdlib-transformed.json"
+data key = "count"
+
+fn update(doc:ptr<StdJson>, number:ptr<StdBuf>) -> i32:
+    slot = stack<ptr<StdJsonNode>>(1)
+    value = stack<i64>(1)
+    next = stack<i64>(1)
+    data = stack<ptr<u8>>(1)
+    size = stack<u64>(1)
+    root = std_json_root(doc)
+    status = std_json_get(root, address(key), 5, slot)
+    if status == 0:
+        status = std_json_i64(load(slot), value)
+    if status == 0:
+        status = std_math_add_i64(load(value), 1, next)
+    if status == 0:
+        status = std_text_format_i64(load(next), number)
+    if status == 0:
+        std_bytes_view(number, data, size)
+        status = std_json_create(doc, 3, load(data), load(size), slot)
+    if status == 0:
+        status = std_json_set(root, address(key), 5, load(slot))
+    return status
+
+fn main() -> i32:
+    input = stack<ptr<StdBuf>>(1)
+    output = stack<ptr<StdBuf>>(1)
+    number = stack<ptr<StdBuf>>(1)
+    doc = stack<ptr<StdJson>>(1)
+    data = stack<ptr<u8>>(1)
+    size = stack<u64>(1)
+    store(input, null)
+    store(output, null)
+    store(number, null)
+    store(doc, null)
+    status = std_io_read_file(address(input_path), 26, std_core_file_limit(), input)
+    if status == 0:
+        std_bytes_view(load(input), data, size)
+        status = std_json_parse(load(data), load(size), 0, doc)
+    if status == 0:
+        status = std_bytes_new(number)
+    if status == 0:
+        status = update(load(doc), load(number))
+    if status == 0:
+        status = std_json_stringify(load(doc), 0, std_core_file_limit(), output)
+    if status == 0:
+        std_bytes_view(load(output), data, size)
+        status = std_io_write_file(address(output_path), 29, load(data), load(size))
+        if status == 0:
+            status = std_io_stdout(load(data), load(size))
+    std_bytes_destroy(load(input))
+    std_bytes_destroy(load(output))
+    std_bytes_destroy(load(number))
+    std_json_destroy(load(doc))
+    return status

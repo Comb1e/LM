@@ -91,4 +91,4 @@ class FrontendTests(unittest.TestCase):
             with self.subTest(source=source):
                 with self.assertRaises(CompileError):
                     parse(source)
-        self.rejected("module m version 3\n", "E_VERSION")
+        self.rejected("module m version 4\n", "E_VERSION")

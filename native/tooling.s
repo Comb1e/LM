@@ -10,6 +10,7 @@ GLOBAL cfg_target
 GLOBAL cfg_build_timeout
 GLOBAL cfg_source
 GLOBAL cfg_type_depth
+GLOBAL cfg_v3_expansion
 GLOBAL cfg_aggregate
 GLOBAL cfg_run_timeout
 GLOBAL cfg_output
@@ -32,6 +33,7 @@ GLOBAL cli_view
 GLOBAL cli_revision
 GLOBAL cli_describe_ops
 GLOBAL cli_stdlib_dir
+GLOBAL cli_syntax
 GLOBAL compact_view
 GLOBAL temp_directory
 GLOBAL temp_assembly
@@ -62,11 +64,13 @@ CONFIG compiler,target,cfg_target,0
 CONFIG compiler,build_timeout_seconds,cfg_build_timeout,1
 CONFIG limits,source_bytes,cfg_source,1
 CONFIG limits,type_depth,cfg_type_depth,1
+CONFIG limits,v3_source_expansion,cfg_v3_expansion,1
 CONFIG limits,aggregate_bytes,cfg_aggregate,1
 CONFIG limits,run_timeout_seconds,cfg_run_timeout,1
 CONFIG limits,output_bytes,cfg_output,1
 CONFIG limits,diagnostics,cfg_diagnostics,1
 CONFIG benchmark,max_repairs,cfg_repairs,1
+.equ CONFIG_COUNT,(.-config_schema)/24
 .text
 
 FUNC trim
@@ -146,7 +150,7 @@ FUNC load_config_text
  test eax,eax
  jz .config_found
  inc rbx
- cmp rbx,11
+ cmp rbx,CONFIG_COUNT
  jb .config_find
  jmp config_error
 .config_found:
@@ -247,6 +251,8 @@ OPTION --optimization,cli_optimization
 OPTION --view,cli_view
 OPTION --expect-revision,cli_revision
 OPTION --stdlib-dir,cli_stdlib_dir
+OPTION --syntax,cli_syntax
+.equ CLI_OPTION_COUNT,(.-cli_options)/16
 .text
 option_value:
  inc r12
@@ -279,7 +285,7 @@ FUNC main
  test eax,eax
  jz .cli_set_option
  inc rbx
- cmp rbx,10
+ cmp rbx,CLI_OPTION_COUNT
  jb .cli_option_scan
  EQ r15, opt_version
  jz .cli_version
@@ -429,6 +435,11 @@ FUNC main
  cmp qword ptr [cli_command],0
  je usage_error
  mov r12,[cli_command]
+ cmp qword ptr [cli_syntax],0
+ je .cli_syntax_valid
+ EQ r12,library_command
+ jnz usage_error
+.cli_syntax_valid:
  EQ r12,cmd_describe
  jz .cli_describe
  EQ r12,library_command
@@ -566,7 +577,7 @@ unsupported_error:
  FAIL e_unsupported, m_unsupported
 .target_error:
  FAIL e_target, m_target
-STR version_text, "LM0 0.5.0 native x86_64-linux-gnu"
+STR version_text, "LM0 0.6.0 native x86_64-linux-gnu"
 STR help_text, "lm0 [--config FILE] check|emit-asm|build|run|inspect|replace|migrate SOURCE [OPTIONS]\nOutput: -o FILE; build: --kind exe|object|shared -O0 --link FILE --library NAME\nLibraries: library list; library describe MODULE [std_MODULE_FUNCTION...]\nLibrary installation: --stdlib-dir DIR; v2 source imports: use std_MODULE\nInspection: --function NAME [--block NAME] or --module; --view compact|full\nRepair: --function NAME [--block NAME] --replacement FILE -o FILE [--expect-revision SHA256]\nMigration: migrate SOURCE -o FILE; instruction guidance: describe OP...\nEmission: --entry; execution: --timeout SECONDS\nOnly -O0 is supported. emit-c, bench and --sanitize are unavailable."
 STR m_usage, "Invalid command arguments; use lm0 --help"
 STR m_unsupported, "Native compiler supports assembly emission and -O0 only; emit-c, bench and --sanitize are unavailable"

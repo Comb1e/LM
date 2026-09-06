@@ -206,7 +206,7 @@ static void export_all(json_object *settings, const char *attempt_path) {
     set_string(manifest, "compiler", require_native(native_call("--version", NULL, NULL)));
     export_corpus(read_json(string_member(settings, "corpus")));
     paired("guidance", "v1", "guidance", read_text("docs/llm-v1.md"));
-    paired("guidance", "v2", "guidance", read_text("docs/llm.md"));
+    paired("guidance", "v2", "guidance", read_text("docs/llm-v2.md"));
     export_prompts();
     json_object_object_add(manifest, "artifacts", artifacts);
     json_object_object_add(manifest, "attempts", export_attempts(attempt_path));

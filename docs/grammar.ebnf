@@ -1,4 +1,5 @@
 (* Lexical whitespace excludes newline. # comments extend to newline. *)
+(* V1/V2 grammar. V3's indentation grammar is specified in v3.md. *)
 module       = lines, "module", name, "version", integer, endline,
                { declaration }, EOF ;
 declaration  = function | foreign | structure | data | library ;

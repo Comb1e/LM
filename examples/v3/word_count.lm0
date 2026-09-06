@@ -1,0 +1,77 @@
+module word_count version 3
+use std_map
+use std_text
+use std_io
+data path = "examples/stdlib/words.txt"
+
+fn count(data:ptr<u8>, size:u64, map:ptr<StdMap>) -> i32:
+    bytes = view(data, size)
+    value = stack<i64>(1)
+    start = 0
+    for i in range(len(bytes) + 1):
+        if i == len(bytes) or bytes[i] <= 32:
+            if start != i:
+                key = offset(data, start)
+                n = cast<u64>(i - start)
+                store(value, 0)
+                status = std_map_get(map, key, n, value)
+                if status != 0 and status != 4:
+                    return status
+                status = std_map_set(map, key, n, load(value) + 1)
+                if status != 0:
+                    return status
+            start = i + 1
+    return 0
+
+fn show(map:ptr<StdMap>, buf:ptr<StdBuf>) -> i32:
+    cursor = stack<u64>(1)
+    key = stack<ptr<u8>>(1)
+    size = stack<u64>(1)
+    value = stack<i64>(1)
+    store(cursor, 0)
+    while true:
+        status = std_map_next(map, cursor, key, size, value)
+        if status == 8:
+            break
+        if status != 0:
+            return status
+        status = std_bytes_append(buf, load(key), load(size))
+        if status == 0:
+            status = std_bytes_push(buf, 61)
+        if status == 0:
+            status = std_text_format_i64(load(value), buf)
+        if status == 0:
+            status = std_bytes_push(buf, 10)
+        if status != 0:
+            return status
+    std_bytes_view(buf, key, size)
+    return std_io_stdout(load(key), load(size))
+
+fn process(input:ptr<StdBuf>, map:ptr<StdMap>, output:ptr<StdBuf>) -> i32:
+    data = stack<ptr<u8>>(1)
+    size = stack<u64>(1)
+    std_bytes_view(input, data, size)
+    std_text_lower_ascii(load(data), load(size))
+    status = count(load(data), load(size), map)
+    if status != 0:
+        return status
+    return show(map, output)
+
+fn main() -> i32:
+    input = stack<ptr<StdBuf>>(1)
+    output = stack<ptr<StdBuf>>(1)
+    map = stack<ptr<StdMap>>(1)
+    store(input, null)
+    store(output, null)
+    store(map, null)
+    status = std_io_read_file(address(path), 25, std_core_file_limit(), input)
+    if status == 0:
+        status = std_map_new(map)
+    if status == 0:
+        status = std_bytes_new(output)
+    if status == 0:
+        status = process(load(input), load(map), load(output))
+    std_bytes_destroy(load(input))
+    std_bytes_destroy(load(output))
+    std_map_destroy(load(map))
+    return status

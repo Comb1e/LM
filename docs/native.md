@@ -1,8 +1,8 @@
 # Native LM0 Compiler
 
-LM0 0.4's supported compiler is an x86-64 System V executable written in GNU
-assembly. It parses, verifies, inspects, repairs, and lowers LM0 without Python or
-generated C. Its output is GNU assembly; GCC is invoked as the assembler/linker
+LM0 0.6's compiler is an x86-64 System V executable with a C V3 frontend and a GNU
+assembly core. It parses, verifies, inspects, repairs, and lowers LM0 without Python
+or generated C. Its output is GNU assembly; GCC is invoked as the assembler/linker
 driver and verifies the configured `x86_64-linux-gnu` target first.
 
 ## Bootstrap
@@ -28,6 +28,10 @@ and offline benchmark orchestrator. It deliberately does not install an `lm0`
 command; `lm0-bench` invokes the native executable for LM0 candidates.
 
 ## Architecture
+
+- `v3.c` parses indentation, checks local types/assignment, and lowers expressions,
+  slices and structured control flow through mapped V2 source text.
+  `v3_bridge.s` shares the existing catalogue, parser and tooling interfaces.
 
 - `frontend.s` tokenizes UTF-8 source and builds arena-owned module records.
 - `verify.s` resolves symbols/registers and computes System V storage layouts.

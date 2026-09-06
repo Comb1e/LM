@@ -9,4 +9,5 @@
 .include "native/tooling.s"
 .include "native/migrate.s"
 .include "native/library.s"
+.include "native/v3_bridge.s"
 .section .note.GNU-stack,"",@progbits

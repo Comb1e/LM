@@ -56,6 +56,11 @@ static char *signature(const char *module, json_object *fn) {
     }
     fprintf(f,") -> %s",str(fn,1)); fclose(f); return s;
 }
+static char *v3_names(const char *source) {
+    char *result=allocate(strlen(source)+1),*p=result;
+    for(;*source;source++)if(*source!='@'&&*source!='%')*p++=*source;
+    return result;
+}
 static void asm_string(FILE *f,const char *label,const char *value) {
     fprintf(f,"%s: .byte ",label);
     for (const unsigned char *p=(const unsigned char *)value;*p;p++) fprintf(f,"%u,",*p);
@@ -137,7 +142,7 @@ int main(int argc,char **argv) {
             fprintf(sf,"use %s\n",dep);
         }
         if(i==0) fputs(type_source,sf);
-        json_object *desc=json_object_new_object(),*apis=json_object_new_array();
+        json_object *desc=json_object_new_object(),*apis=json_object_new_array(),*apis3=json_object_new_array();
         set_bool(desc,"ok",1);set_string(desc,"module",name);set_string(desc,"catalogue",hash);set_string(desc,"policy",policy);
         set_string(desc,"summary",string_member(m,"summary"));json_object_object_add(desc,"depends",json_object_get(deps));
         fprintf(d,"\n## %s\n\n%s\n",name,string_member(m,"summary"));
@@ -161,6 +166,13 @@ int main(int argc,char **argv) {
             for(size_t k=0;k<json_object_array_length(params);k++) fprintf(ef,"%s%%%s",k?", ":"",str(json_object_array_get_idx(params,k),0));
             fputs(")",ef);fclose(ef);set_string(api,"call",example);free(example);
             json_object_array_add(apis,api);
+            json_object *api3=json_object_new_object();set_string(api3,"name",symbol);
+            char *sig3=v3_names(sig);set_string(api3,"signature",sig3);free(sig3);set_string(api3,"contract",str(fn,3));
+            char *call3=NULL;size_t c3n=0;FILE *c3=open_memstream(&call3,&c3n);
+            fprintf(c3,"%s%s(",strcmp(str(fn,1),"void")?"result = ":"",symbol);
+            for(size_t k=0;k<json_object_array_length(params);k++)fprintf(c3,"%s%s",k?", ":"",str(json_object_array_get_idx(params,k),0));
+            fputs(")",c3);fclose(c3);set_string(api3,"call",call3);free(call3);json_object_array_add(apis3,api3);
+            char *v3label=format("library_api3_%zu_%zu",i,j);asm_string(a,v3label,json_object_to_json_string_ext(api3,JSON_C_TO_STRING_PLAIN));free(v3label);
             char *label=format("library_api_%zu_%zu",i,j);asm_string(a,label,json_object_to_json_string_ext(api,JSON_C_TO_STRING_PLAIN));free(label);
             label=format("library_symbol_%zu_%zu",i,j);asm_string(a,label,symbol);free(label);
             fprintf(d,"\n```text\n%s\n```\n%s\n",sig,str(fn,3));free(sig);free(symbol);
@@ -169,8 +181,13 @@ int main(int argc,char **argv) {
         char *label=format("library_name_%zu",i);asm_string(a,label,name);free(label);
         label=format("library_source_%zu",i);asm_string(a,label,src);free(label);
         label=format("library_description_%zu",i);asm_string(a,label,json_object_to_json_string_ext(desc,JSON_C_TO_STRING_PLAIN));free(label);
+        json_object_object_add(desc,"functions",apis3);
+        label=format("library_description3_%zu",i);asm_string(a,label,json_object_to_json_string_ext(desc,JSON_C_TO_STRING_PLAIN));free(label);
         fprintf(a,".align 8\nlibrary_apis_%zu:\n",i);
         for(size_t j=0;j<json_object_array_length(fns);j++)fprintf(a,".quad library_symbol_%zu_%zu,library_api_%zu_%zu\n",i,j,i,j);
+        fputs(".quad 0,0\n",a);
+        fprintf(a,".align 8\nlibrary_apis3_%zu:\n",i);
+        for(size_t j=0;j<json_object_array_length(fns);j++)fprintf(a,".quad library_symbol_%zu_%zu,library_api3_%zu_%zu\n",i,j,i,j);
         fputs(".quad 0,0\n",a);
         json_object *item=json_object_new_object();set_string(item,"module",name);set_string(item,"summary",string_member(m,"summary"));json_object_array_add(listing,item);
         char *file=format("%s.lmi",name);FILE *interface=open_output(argv[2],file);fprintf(interface,"module %s version 2\n%s",name,src);fclose(interface);free(file);free(src);json_object_put(desc);
@@ -179,6 +196,8 @@ int main(int argc,char **argv) {
     asm_string(a,"library_listing",json_object_to_json_string_ext(list,JSON_C_TO_STRING_PLAIN));
     fprintf(a,".equ LIBRARY_COUNT,%zu\n.align 8\nlibrary_catalog:\n",count);
     for(size_t i=0;i<count;i++)fprintf(a,".quad library_name_%zu,library_source_%zu,library_description_%zu,library_apis_%zu\n",i,i,i,i);
+    fputs(".align 8\nlibrary_catalog_v3:\n",a);
+    for(size_t i=0;i<count;i++)fprintf(a,".quad library_name_%zu,library_source_%zu,library_description3_%zu,library_apis3_%zu\n",i,i,i,i);
     fputs(".text\n",a);fputs("#endif\n",h);
     if(fclose(a)||fclose(h)||fclose(d))die("Cannot finish library artifacts");
     FILE *identity=open_output(argv[2],"catalog.id");fprintf(identity,"%s\n",hash);fclose(identity);

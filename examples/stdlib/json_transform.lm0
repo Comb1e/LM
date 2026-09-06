@@ -95,7 +95,7 @@ fn @main() -> i32 {
     %p = load %data
     %n = load %len
     %path = address @output_path
-    %status = call @std_io_write_file(%path, 28, %p, %n)
+    %status = call @std_io_write_file(%path, 29, %p, %n)
     %ok = eq %status, 0
     branch %ok, ^stdout(%input, %output, %number, %doc, %p, %n), ^cleanup(%input, %output, %number, %doc, %status)
 ^stdout(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %p:ptr<u8>, %n:u64):

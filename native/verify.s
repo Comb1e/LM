@@ -644,6 +644,7 @@ STR m_field, "Unknown struct field"
 STR m_data, "Unknown static data"
 
 FUNC verify
+ call v3_verify
  mov qword ptr [diag_phase], offset p_verify
  cmp qword ptr [module_version], 1
  je .verify_version_ok

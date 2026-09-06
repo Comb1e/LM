@@ -398,6 +398,8 @@ FUNC fail
  C text_out, "offset j_function"
  C json_string, r14
 .fail_block:
+ cmp qword ptr [v3_active],0
+ jne .fail_types
  mov rax, [cur_block]
  test rax, rax
  jz .fail_reg

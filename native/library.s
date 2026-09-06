@@ -70,6 +70,13 @@ FUNC library_import
  RETURN
 
 FUNC library_cli
+ cmp qword ptr [cli_syntax],0
+ je .library_syntax_ok
+ EQ "qword ptr [cli_syntax]",library_syntax_v2
+ jz .library_syntax_ok
+ EQ "qword ptr [cli_syntax]",library_syntax_v3
+ jnz usage_error
+.library_syntax_ok:
  mov r12,[cli_describe_ops]
  test r12,r12
  jz usage_error
@@ -87,6 +94,14 @@ FUNC library_cli
  jz usage_error
  C library_find,"qword ptr [r12+NAME]"
  mov r13,rax
+ cmp qword ptr [cli_syntax],0
+ je .library_syntax_selected
+ mov r15,rdx
+ EQ "qword ptr [cli_syntax]",library_syntax_v3
+ jnz .library_syntax_selected
+ shl r15,5
+ lea r13,[library_catalog_v3+r15]
+.library_syntax_selected:
  mov r12,[r12+NEXT]
  test r12,r12
  jnz .library_select_apis
@@ -127,6 +142,14 @@ FUNC library_cli
  RETURN
 
 FUNC library_api
+ cmp qword ptr [v3_active],0
+ je .library_api_version_ready
+ mov rax,rdi
+ sub rax,offset library_catalog
+ cmp rax,LIBRARY_COUNT*32
+ jae .library_api_version_ready
+ lea rdi,[library_catalog_v3+rax]
+.library_api_version_ready:
  mov r12,[rdi+24]
  mov r13,rsi
  cmp byte ptr [r13],64
@@ -243,6 +266,8 @@ FUNC library_archive
 .library_source_error:
  FAIL library_error,library_source_message
 STR library_command,"library"
+STR library_syntax_v2,"v2"
+STR library_syntax_v3,"v3"
 STR library_use_word,"use"
 STR library_list_word,"list"
 STR library_describe_word,"describe"

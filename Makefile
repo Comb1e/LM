@@ -9,9 +9,13 @@ NATIVE = $(wildcard native/*.s native/*.inc native/*.asm)
 .PHONY: all test smoke eval stdlib test-stdlib snake test-snake install clean
 all: build/lm0 stdlib
 
-build/lm0: Makefile $(NATIVE) native/defaults.conf build/stdlib/catalog.inc
+build/v3.o: native/v3.c native/v3.h
 	mkdir -p build
-	$(CC) $(ASFLAGS) -no-pie -Wl,-z,noexecstack native/lm0.s -o $@
+	$(CC) $(EVAL_CFLAGS) -Wno-misleading-indentation -c native/v3.c -o $@
+
+build/lm0: Makefile $(NATIVE) native/defaults.conf build/stdlib/catalog.inc build/v3.o
+	mkdir -p build
+	$(CC) $(ASFLAGS) -no-pie -Wl,-z,noexecstack native/lm0.s build/v3.o -o $@
 
 build/library-gen: tools/library_gen.c $(EVAL_COMMON) native/hash.s
 	mkdir -p build
@@ -93,8 +97,15 @@ test-stdlib: stdlib build/stdlib-test build/library-tools-test build/library-mea
 smoke: build/lm0
 	sh tests/native-smoke.sh ./build/lm0
 
-test: smoke test-stdlib
+test: smoke test-stdlib test-v3
 	python3 -m unittest discover -s tests -v
+
+.PHONY: test-v3
+test-v3: build/lm0 build/v3-test
+	./build/v3-test
+
+build/v3-test: tests/v3_test.c $(EVAL_COMMON)
+	$(CC) $(EVAL_CFLAGS) -Wno-misleading-indentation -Itools tests/v3_test.c tools/eval_common.c -ljson-c -o $@
 
 eval: build/lm0 build/lm0-eval build/lm0-eval-driver
 
@@ -113,6 +124,7 @@ install: all
 	install -m 644 build/stdlib/liblm0std.a build/stdlib/catalog.id build/stdlib/std.h $(DESTDIR)$(PREFIX)/lib/lm0/
 
 clean:
+	rm -f build/v3.o build/v3-test
 	rm -f build/lm0 build/library-gen build/library-check build/library-measure build/library-tools-test build/stdlib-test
 	rm -f build/network-test build/snake-test build/snake/snake build/snake/*.o build/snake/config.json
 	rm -rf build/snake/static
