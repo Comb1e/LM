@@ -1,0 +1,524 @@
+module snake version 1
+
+# State: 0 ready, 1 running, 2 paused, 3 lost, 4 won.
+# Direction: 0 up, 1 right, 2 down, 3 left. Cells are y * width + x.
+struct Game {
+    width:i32
+    height:i32
+    capacity:i32
+    initial:i32
+    points:i32
+    length:i32
+    direction:i32
+    status:i32
+    food:i32
+    score:i32
+    ticks:i32
+    reason:i32
+    wrap:i32
+    seed:u32
+    cells:ptr<i32>
+}
+
+fn @occupied(%g:ptr<Game>, %cell:i32, %limit:i32) -> bool {
+^entry:
+    %zero:i32 = const 0
+    jump ^scan(%zero)
+^scan(%i:i32):
+    %more:bool = lt %i, %limit
+    branch %more, ^visit(%i), ^absent()
+^visit(%index:i32):
+    %base_ptr:ptr<ptr<i32>> = field %g, cells
+    %base:ptr<i32> = load %base_ptr
+    %offset:i64 = cast %index
+    %slot:ptr<i32> = offset %base, %offset
+    %value:i32 = load %slot
+    %match:bool = eq %value, %cell
+    branch %match, ^present(), ^next(%index)
+^next(%previous:i32):
+    %one:i32 = const 1
+    %following:i32 = add %previous, %one
+    jump ^scan(%following)
+^present:
+    %yes:bool = const true
+    return %yes
+^absent:
+    %no:bool = const false
+    return %no
+}
+
+# Choose a rank among free cells, then scan once. Even a nearly full board terminates.
+fn @place_food(%g:ptr<Game>) -> void {
+^entry:
+    %capacity_ptr:ptr<i32> = field %g, capacity
+    %capacity:i32 = load %capacity_ptr
+    %length_ptr:ptr<i32> = field %g, length
+    %length:i32 = load %length_ptr
+    %full:bool = eq %length, %capacity
+    branch %full, ^won(), ^random(%capacity, %length)
+^won:
+    %status_ptr:ptr<i32> = field %g, status
+    %status:i32 = const 4
+    store %status_ptr, %status
+    %food_ptr:ptr<i32> = field %g, food
+    %none:i32 = const -1
+    store %food_ptr, %none
+    return
+^random(%total:i32, %used:i32):
+    %seed_ptr:ptr<u32> = field %g, seed
+    %seed:u32 = load %seed_ptr
+    %multiplier:u32 = const 1664525
+    %increment:u32 = const 1013904223
+    %product:u32 = mul %seed, %multiplier
+    %next_seed:u32 = add %product, %increment
+    store %seed_ptr, %next_seed
+    %available:i32 = sub %total, %used
+    %range:u32 = cast %available
+    %rank_bits:u32 = rem %next_seed, %range
+    %rank:i32 = cast %rank_bits
+    %zero:i32 = const 0
+    jump ^scan(%zero, %rank, %used)
+^scan(%candidate:i32, %remaining:i32, %count:i32):
+    %taken:bool = call @occupied(%g, %candidate, %count)
+    branch %taken, ^advance(%candidate, %remaining, %count), ^free_cell(%candidate, %remaining, %count)
+^free_cell(%free_index:i32, %free_rank:i32, %body_length:i32):
+    %first:i32 = const 0
+    %chosen:bool = eq %free_rank, %first
+    branch %chosen, ^place(%free_index), ^skip(%free_index, %free_rank, %body_length)
+^skip(%skipped:i32, %old_rank:i32, %body_count:i32):
+    %step:i32 = const 1
+    %new_rank:i32 = sub %old_rank, %step
+    jump ^advance(%skipped, %new_rank, %body_count)
+^advance(%old_index:i32, %target_rank:i32, %scan_count:i32):
+    %unit:i32 = const 1
+    %new_index:i32 = add %old_index, %unit
+    jump ^scan(%new_index, %target_rank, %scan_count)
+^place(%location:i32):
+    %destination:ptr<i32> = field %g, food
+    store %destination, %location
+    return
+}
+
+export c fn @snake_create(%width:i32, %height:i32, %initial:i32, %seed:u32, %wrap:i32, %points:i32) -> ptr<Game> {
+^entry:
+    %minimum:i32 = const 8
+    %width_valid:bool = ge %width, %minimum
+    branch %width_valid, ^height_min(), ^invalid()
+^height_min:
+    %min_height:i32 = const 8
+    %height_valid:bool = ge %height, %min_height
+    branch %height_valid, ^width_max(), ^invalid()
+^width_max:
+    %max_width:i32 = const 64
+    %width_fits:bool = le %width, %max_width
+    branch %width_fits, ^height_max(), ^invalid()
+^height_max:
+    %max_height:i32 = const 64
+    %height_fits:bool = le %height, %max_height
+    branch %height_fits, ^initial_min(), ^invalid()
+^initial_min:
+    %min_length:i32 = const 2
+    %long_enough:bool = ge %initial, %min_length
+    branch %long_enough, ^initial_max(), ^invalid()
+^initial_max:
+    %divisor:i32 = const 2
+    %half:i32 = div %width, %divisor
+    %short_enough:bool = le %initial, %half
+    branch %short_enough, ^wrap_min(), ^invalid()
+^wrap_min:
+    %zero_wrap:i32 = const 0
+    %wrap_nonnegative:bool = ge %wrap, %zero_wrap
+    branch %wrap_nonnegative, ^wrap_max(), ^invalid()
+^wrap_max:
+    %one_wrap:i32 = const 1
+    %wrap_valid:bool = le %wrap, %one_wrap
+    branch %wrap_valid, ^points_min(), ^invalid()
+^points_min:
+    %one_point:i32 = const 1
+    %positive:bool = ge %points, %one_point
+    branch %positive, ^points_max(), ^invalid()
+^points_max:
+    %max_points:i32 = const 10000
+    %points_fit:bool = le %points, %max_points
+    branch %points_fit, ^allocate(), ^invalid()
+^invalid:
+    %null:ptr<Game> = null
+    return %null
+^allocate:
+    %one:u64 = const 1
+    %game:ptr<Game> = alloc Game, %one
+    %capacity:i32 = mul %width, %height
+    %count:u64 = cast %capacity
+    %cells:ptr<i32> = alloc i32, %count
+    %width_ptr:ptr<i32> = field %game, width
+    store %width_ptr, %width
+    %height_ptr:ptr<i32> = field %game, height
+    store %height_ptr, %height
+    %capacity_ptr:ptr<i32> = field %game, capacity
+    store %capacity_ptr, %capacity
+    %initial_ptr:ptr<i32> = field %game, initial
+    store %initial_ptr, %initial
+    %points_ptr:ptr<i32> = field %game, points
+    store %points_ptr, %points
+    %length_ptr:ptr<i32> = field %game, length
+    store %length_ptr, %initial
+    %direction_ptr:ptr<i32> = field %game, direction
+    %right:i32 = const 1
+    store %direction_ptr, %right
+    %status_ptr:ptr<i32> = field %game, status
+    %zero:i32 = const 0
+    store %status_ptr, %zero
+    %score_ptr:ptr<i32> = field %game, score
+    store %score_ptr, %zero
+    %ticks_ptr:ptr<i32> = field %game, ticks
+    store %ticks_ptr, %zero
+    %reason_ptr:ptr<i32> = field %game, reason
+    store %reason_ptr, %zero
+    %wrap_ptr:ptr<i32> = field %game, wrap
+    store %wrap_ptr, %wrap
+    %seed_ptr:ptr<u32> = field %game, seed
+    store %seed_ptr, %seed
+    %cells_ptr:ptr<ptr<i32>> = field %game, cells
+    store %cells_ptr, %cells
+    %two:i32 = const 2
+    %x:i32 = div %width, %two
+    %y:i32 = div %height, %two
+    %row:i32 = mul %y, %width
+    %head:i32 = add %row, %x
+    jump ^initialize(%game, %cells, %head, %zero)
+^initialize(%current:ptr<Game>, %body:ptr<i32>, %head_cell:i32, %index:i32):
+    %more:bool = lt %index, %initial
+    branch %more, ^segment(%current, %body, %head_cell, %index), ^ready(%current)
+^segment(%building:ptr<Game>, %base:ptr<i32>, %first:i32, %i:i32):
+    %offset:i64 = cast %i
+    %slot:ptr<i32> = offset %base, %offset
+    %cell:i32 = sub %first, %i
+    store %slot, %cell
+    %unit:i32 = const 1
+    %next:i32 = add %i, %unit
+    jump ^initialize(%building, %base, %first, %next)
+^ready(%result:ptr<Game>):
+    call @place_food(%result)
+    return %result
+}
+
+export c fn @snake_destroy(%g:ptr<Game>) -> void {
+^entry:
+    %null:ptr<Game> = null
+    %exists:bool = ne %g, %null
+    branch %exists, ^release(), ^done()
+^release:
+    %cells_ptr:ptr<ptr<i32>> = field %g, cells
+    %cells:ptr<i32> = load %cells_ptr
+    free %cells
+    free %g
+    return
+^done:
+    return
+}
+
+fn @lose(%g:ptr<Game>, %reason:i32) -> void {
+^entry:
+    %status_ptr:ptr<i32> = field %g, status
+    %dead:i32 = const 3
+    store %status_ptr, %dead
+    %reason_ptr:ptr<i32> = field %g, reason
+    store %reason_ptr, %reason
+    return
+}
+
+fn @step(%g:ptr<Game>, %requested:i32) -> void {
+^entry:
+    %zero:i32 = const 0
+    %has_direction:bool = ge %requested, %zero
+    branch %has_direction, ^validate_direction(), ^position()
+^validate_direction:
+    %last:i32 = const 3
+    %valid:bool = le %requested, %last
+    branch %valid, ^check_reverse(), ^position()
+^check_reverse:
+    %direction_ptr:ptr<i32> = field %g, direction
+    %old_direction:i32 = load %direction_ptr
+    %two:i32 = const 2
+    %four:i32 = const 4
+    %opposite_sum:i32 = add %old_direction, %two
+    %opposite:i32 = rem %opposite_sum, %four
+    %reversing:bool = eq %requested, %opposite
+    branch %reversing, ^position(), ^turn()
+^turn:
+    %turn_ptr:ptr<i32> = field %g, direction
+    store %turn_ptr, %requested
+    jump ^position()
+^position:
+    %cells_ptr:ptr<ptr<i32>> = field %g, cells
+    %cells:ptr<i32> = load %cells_ptr
+    %head:i32 = load %cells
+    %width_ptr:ptr<i32> = field %g, width
+    %width:i32 = load %width_ptr
+    %x:i32 = rem %head, %width
+    %y:i32 = div %head, %width
+    %facing_ptr:ptr<i32> = field %g, direction
+    %facing:i32 = load %facing_ptr
+    %up:i32 = const 0
+    %is_up:bool = eq %facing, %up
+    branch %is_up, ^up(%x, %y), ^horizontal(%x, %y, %facing)
+^up(%up_x:i32, %up_y:i32):
+    %up_one:i32 = const 1
+    %above:i32 = sub %up_y, %up_one
+    jump ^boundary(%up_x, %above)
+^horizontal(%hx:i32, %hy:i32, %hd:i32):
+    %right:i32 = const 1
+    %is_right:bool = eq %hd, %right
+    branch %is_right, ^right(%hx, %hy), ^vertical(%hx, %hy, %hd)
+^right(%right_x:i32, %right_y:i32):
+    %right_one:i32 = const 1
+    %east:i32 = add %right_x, %right_one
+    jump ^boundary(%east, %right_y)
+^vertical(%vx:i32, %vy:i32, %vd:i32):
+    %down:i32 = const 2
+    %is_down:bool = eq %vd, %down
+    branch %is_down, ^down(%vx, %vy), ^left(%vx, %vy)
+^down(%down_x:i32, %down_y:i32):
+    %down_one:i32 = const 1
+    %below:i32 = add %down_y, %down_one
+    jump ^boundary(%down_x, %below)
+^left(%left_x:i32, %left_y:i32):
+    %left_one:i32 = const 1
+    %west:i32 = sub %left_x, %left_one
+    jump ^boundary(%west, %left_y)
+^boundary(%next_x:i32, %next_y:i32):
+    %wrap_ptr:ptr<i32> = field %g, wrap
+    %wrap:i32 = load %wrap_ptr
+    %no_wrap:i32 = const 0
+    %wrapping:bool = ne %wrap, %no_wrap
+    branch %wrapping, ^wrap(%next_x, %next_y), ^check_x_min(%next_x, %next_y)
+^wrap(%wx:i32, %wy:i32):
+    %ww_ptr:ptr<i32> = field %g, width
+    %ww:i32 = load %ww_ptr
+    %wh_ptr:ptr<i32> = field %g, height
+    %wh:i32 = load %wh_ptr
+    %positive_x:i32 = add %wx, %ww
+    %positive_y:i32 = add %wy, %wh
+    %wrapped_x:i32 = rem %positive_x, %ww
+    %wrapped_y:i32 = rem %positive_y, %wh
+    jump ^collision(%wrapped_x, %wrapped_y)
+^check_x_min(%cx:i32, %cy:i32):
+    %x_zero:i32 = const 0
+    %x_valid:bool = ge %cx, %x_zero
+    branch %x_valid, ^check_y_min(%cx, %cy), ^wall()
+^check_y_min(%dx:i32, %dy:i32):
+    %y_zero:i32 = const 0
+    %y_valid:bool = ge %dy, %y_zero
+    branch %y_valid, ^check_x_max(%dx, %dy), ^wall()
+^check_x_max(%ex:i32, %ey:i32):
+    %max_x_ptr:ptr<i32> = field %g, width
+    %max_x:i32 = load %max_x_ptr
+    %inside_x:bool = lt %ex, %max_x
+    branch %inside_x, ^check_y_max(%ex, %ey), ^wall()
+^check_y_max(%fx:i32, %fy:i32):
+    %max_y_ptr:ptr<i32> = field %g, height
+    %max_y:i32 = load %max_y_ptr
+    %inside_y:bool = lt %fy, %max_y
+    branch %inside_y, ^collision(%fx, %fy), ^wall()
+^wall:
+    %wall_reason:i32 = const 1
+    call @lose(%g, %wall_reason)
+    return
+^collision(%safe_x:i32, %safe_y:i32):
+    %board_width_ptr:ptr<i32> = field %g, width
+    %board_width:i32 = load %board_width_ptr
+    %row:i32 = mul %safe_y, %board_width
+    %next_cell:i32 = add %row, %safe_x
+    %food_ptr:ptr<i32> = field %g, food
+    %food:i32 = load %food_ptr
+    %eating:bool = eq %next_cell, %food
+    %length_ptr:ptr<i32> = field %g, length
+    %length:i32 = load %length_ptr
+    branch %eating, ^grow(%next_cell, %length), ^travel(%next_cell, %length)
+^grow(%meal:i32, %old_length:i32):
+    %growth:i32 = const 1
+    %grown:i32 = add %old_length, %growth
+    %ate:bool = const true
+    jump ^check_body(%meal, %old_length, %grown, %ate)
+^travel(%destination:i32, %travel_length:i32):
+    %tail:i32 = const 1
+    %without_tail:i32 = sub %travel_length, %tail
+    %not_ate:bool = const false
+    jump ^check_body(%destination, %without_tail, %travel_length, %not_ate)
+^check_body(%target:i32, %checked:i32, %new_length:i32, %has_eaten:bool):
+    %hit:bool = call @occupied(%g, %target, %checked)
+    branch %hit, ^self_hit(), ^advance(%target, %new_length, %has_eaten)
+^self_hit:
+    %body_reason:i32 = const 2
+    call @lose(%g, %body_reason)
+    return
+^advance(%new_head:i32, %final_length:i32, %feeding:bool):
+    %body_ptr:ptr<ptr<i32>> = field %g, cells
+    %body:ptr<i32> = load %body_ptr
+    %one_index:i64 = const 1
+    %shifted:ptr<i32> = offset %body, %one_index
+    %one_cell:i32 = const 1
+    %moved_cells:i32 = sub %final_length, %one_cell
+    %moved_count:u64 = cast %moved_cells
+    %cell_bytes:u64 = sizeof i32
+    %bytes:u64 = mul %moved_count, %cell_bytes
+    move %shifted, %body, %bytes
+    store %body, %new_head
+    %final_length_ptr:ptr<i32> = field %g, length
+    store %final_length_ptr, %final_length
+    %ticks_ptr:ptr<i32> = field %g, ticks
+    %ticks:i32 = load %ticks_ptr
+    %next_tick:i32 = add %ticks, %one_cell
+    store %ticks_ptr, %next_tick
+    branch %feeding, ^score(), ^done()
+^score:
+    %score_ptr:ptr<i32> = field %g, score
+    %old_score:i32 = load %score_ptr
+    %points_ptr:ptr<i32> = field %g, points
+    %points:i32 = load %points_ptr
+    %new_score:i32 = add %old_score, %points
+    store %score_ptr, %new_score
+    call @place_food(%g)
+    return
+^done:
+    return
+}
+
+# Action: 0 start/resume, 1 pause, 2 tick. Invalid transitions have no effect.
+export c fn @snake_control(%g:ptr<Game>, %action:i32, %direction:i32) -> i32 {
+^entry:
+    %null:ptr<Game> = null
+    %exists:bool = ne %g, %null
+    branch %exists, ^dispatch(), ^invalid()
+^dispatch:
+    %status_ptr:ptr<i32> = field %g, status
+    %status:i32 = load %status_ptr
+    %start:i32 = const 0
+    %starting:bool = eq %action, %start
+    branch %starting, ^start(%status), ^active(%status)
+^start(%start_state:i32):
+    %ready:i32 = const 0
+    %is_ready:bool = eq %start_state, %ready
+    branch %is_ready, ^run(), ^resume(%start_state)
+^resume(%resume_state:i32):
+    %paused:i32 = const 2
+    %is_paused:bool = eq %resume_state, %paused
+    branch %is_paused, ^run(), ^result()
+^run:
+    %run_ptr:ptr<i32> = field %g, status
+    %running:i32 = const 1
+    store %run_ptr, %running
+    jump ^result()
+^active(%active_state:i32):
+    %running_state:i32 = const 1
+    %is_running:bool = eq %active_state, %running_state
+    branch %is_running, ^pause_check(), ^result()
+^pause_check:
+    %pause:i32 = const 1
+    %pausing:bool = eq %action, %pause
+    branch %pausing, ^pause(), ^tick_check()
+^pause:
+    %pause_ptr:ptr<i32> = field %g, status
+    %paused_state:i32 = const 2
+    store %pause_ptr, %paused_state
+    jump ^result()
+^tick_check:
+    %tick:i32 = const 2
+    %ticking:bool = eq %action, %tick
+    branch %ticking, ^tick(), ^result()
+^tick:
+    call @step(%g, %direction)
+    jump ^result()
+^result:
+    %result_ptr:ptr<i32> = field %g, status
+    %state:i32 = load %result_ptr
+    return %state
+^invalid:
+    %error:i32 = const -1
+    return %error
+}
+
+# Snapshot selectors: status, direction, food, length, score, ticks, reason, body...
+export c fn @snake_read(%g:ptr<Game>, %index:i32) -> i32 {
+^entry:
+    %null:ptr<Game> = null
+    %exists:bool = ne %g, %null
+    branch %exists, ^status(), ^invalid()
+^status:
+    %zero:i32 = const 0
+    %is_status:bool = eq %index, %zero
+    branch %is_status, ^get_status(), ^direction()
+^get_status:
+    %status_ptr:ptr<i32> = field %g, status
+    %status_value:i32 = load %status_ptr
+    return %status_value
+^direction:
+    %one:i32 = const 1
+    %is_direction:bool = eq %index, %one
+    branch %is_direction, ^get_direction(), ^food()
+^get_direction:
+    %direction_ptr:ptr<i32> = field %g, direction
+    %direction_value:i32 = load %direction_ptr
+    return %direction_value
+^food:
+    %two:i32 = const 2
+    %is_food:bool = eq %index, %two
+    branch %is_food, ^get_food(), ^length()
+^get_food:
+    %food_ptr:ptr<i32> = field %g, food
+    %food_value:i32 = load %food_ptr
+    return %food_value
+^length:
+    %three:i32 = const 3
+    %is_length:bool = eq %index, %three
+    branch %is_length, ^get_length(), ^score()
+^get_length:
+    %length_ptr:ptr<i32> = field %g, length
+    %length_value:i32 = load %length_ptr
+    return %length_value
+^score:
+    %four:i32 = const 4
+    %is_score:bool = eq %index, %four
+    branch %is_score, ^get_score(), ^ticks()
+^get_score:
+    %score_ptr:ptr<i32> = field %g, score
+    %score_value:i32 = load %score_ptr
+    return %score_value
+^ticks:
+    %five:i32 = const 5
+    %is_ticks:bool = eq %index, %five
+    branch %is_ticks, ^get_ticks(), ^reason()
+^get_ticks:
+    %ticks_ptr:ptr<i32> = field %g, ticks
+    %ticks_value:i32 = load %ticks_ptr
+    return %ticks_value
+^reason:
+    %six:i32 = const 6
+    %is_reason:bool = eq %index, %six
+    branch %is_reason, ^get_reason(), ^body()
+^get_reason:
+    %reason_ptr:ptr<i32> = field %g, reason
+    %reason_value:i32 = load %reason_ptr
+    return %reason_value
+^body:
+    %header:i32 = const 7
+    %body_index:i32 = sub %index, %header
+    %minimum:i32 = const 0
+    %nonnegative:bool = ge %body_index, %minimum
+    branch %nonnegative, ^body_bound(%body_index), ^invalid()
+^body_bound(%checked:i32):
+    %count_ptr:ptr<i32> = field %g, length
+    %count:i32 = load %count_ptr
+    %in_bounds:bool = lt %checked, %count
+    branch %in_bounds, ^get_body(%checked), ^invalid()
+^get_body(%offset_value:i32):
+    %base_ptr:ptr<ptr<i32>> = field %g, cells
+    %base:ptr<i32> = load %base_ptr
+    %offset:i64 = cast %offset_value
+    %slot:ptr<i32> = offset %base, %offset
+    %cell:i32 = load %slot
+    return %cell
+^invalid:
+    %error:i32 = const -1
+    return %error
+}

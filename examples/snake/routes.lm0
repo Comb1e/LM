@@ -1,0 +1,364 @@
+module snake_routes version 2
+use std_http
+use std_json
+use std_io
+
+extern c fn @snake_zlen(%text:ptr<u8>) -> u64
+extern c fn @snake_word(%list:ptr<u8>, %index:i32) -> ptr<u8>
+extern c fn @snake_put(%buf:ptr<StdBuf>, %word:ptr<u8>) -> i32
+extern c fn @snake_eq(%data:ptr<u8>, %len:u64, %word:ptr<u8>) -> bool
+extern c fn @snake_path(%base:ptr<u8>, %len:u64, %name:ptr<u8>, %out:ptr<ptr<StdBuf>>) -> i32
+extern c fn @snake_setting(%doc:ptr<StdJson>, %index:i32) -> i64
+extern c fn @snake_config_body(%doc:ptr<StdJson>, %out:ptr<ptr<StdBuf>>) -> i32
+extern c fn @snake_app_request(%app:ptr<void>, %id:ptr<u8>, %len:u64, %payload:ptr<StdJson>, %now:u64, %out:ptr<ptr<StdBuf>>) -> i32
+
+struct Routes {
+    app:ptr<void>
+    config:ptr<StdBuf>
+    limit:u64
+    asset_limit:u64
+    assets:[ptr<StdBuf>;5]
+}
+data @names = "index.html\u0000style.css\u0000app.js\u0000icons.js\u0000favicon.svg\u0000"
+data @paths = "/index.html\u0000/style.css\u0000/app.js\u0000/icons.js\u0000/favicon.svg\u0000"
+data @types = "Content-Type: text/html; charset=utf-8\r\n\u0000Content-Type: text/css; charset=utf-8\r\n\u0000Content-Type: text/javascript; charset=utf-8\r\n\u0000Content-Type: text/javascript; charset=utf-8\r\n\u0000Content-Type: image/svg+xml\r\n\u0000"
+data @json = "Content-Type: application/json; charset=utf-8\r\n\u0000"
+data @security = "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'\r\n\u0000"
+data @root = "/\u0000"
+data @config_path = "/api/config\u0000"
+data @games_path = "/api/games\u0000"
+data @game_prefix = "/api/games/\u0000"
+data @bad = "{\"error\":\"Invalid JSON request or game options\"}\u0000"
+data @missing = "{\"error\":\"Not found or game expired\"}\u0000"
+data @origin = "{\"error\":\"Cross-origin requests are not accepted\"}\u0000"
+data @large = "{\"error\":\"Request body is too large or empty\"}\u0000"
+data @type = "{\"error\":\"Expected application/json\"}\u0000"
+data @busy = "{\"error\":\"Game service is temporarily unavailable\"}\u0000"
+data @timeout = "{\"error\":\"Request timed out\"}\u0000"
+data @unsupported = "{\"error\":\"Unsupported HTTP request\"}\u0000"
+
+fn @reply(%code:i32, %type:ptr<u8>, %body:ptr<u8>, %len:u64, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %size = stack u64, 1
+    %s = call @std_bytes_new(%slot)
+    %ok = eq %s, 0
+    branch %ok, ^reserve(%slot, %data, %size), ^error(%s)
+^reserve(%slot:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %size:ptr<u64>):
+    %buf = load %slot
+    %s = call @std_bytes_reserve(%buf, 512)
+    %ok = eq %s, 0
+    branch %ok, ^headers(%buf, %data, %size), ^cleanup(%buf, %s)
+^headers(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %size:ptr<u64>):
+    %s1 = call @snake_put(%buf, %type)
+    %security = address @security
+    %s2 = call @snake_put(%buf, %security)
+    call @std_bytes_view(%buf, %data, %size)
+    %p = load %data
+    %n = load %size
+    %s = call @std_http_response(%code, %p, %n, %body, %len, %limit, %out)
+    jump ^cleanup(%buf, %s)
+^cleanup(%buf:ptr<StdBuf>, %s:i32):
+    call @std_bytes_destroy(%buf)
+    return %s
+^error(%s:i32):
+    return %s
+}
+fn @reply_buffer(%code:i32, %type:ptr<u8>, %buf:ptr<StdBuf>, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %s = call @reply(%code, %type, %p, %n, %limit, %out)
+    return %s
+}
+export c fn @snake_error(%code:i32, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %is = eq %code, 400
+    %word = address @bad
+    branch %is, ^write(%word), ^missing()
+^missing:
+    %is = eq %code, 404
+    %word = address @missing
+    branch %is, ^write(%word), ^origin()
+^origin:
+    %is = eq %code, 403
+    %word = address @origin
+    branch %is, ^write(%word), ^large()
+^large:
+    %is = eq %code, 413
+    %word = address @large
+    branch %is, ^write(%word), ^type()
+^type:
+    %is = eq %code, 415
+    %word = address @type
+    branch %is, ^write(%word), ^busy()
+^busy:
+    %is = eq %code, 503
+    %word = address @busy
+    branch %is, ^write(%word), ^timeout()
+^timeout:
+    %is = eq %code, 408
+    %word = address @timeout
+    branch %is, ^write(%word), ^unsupported()
+^unsupported:
+    %word = address @unsupported
+    jump ^write(%word)
+^write(%word:ptr<u8>):
+    %n = call @snake_zlen(%word)
+    %type = address @json
+    %s = call @reply(%code, %type, %word, %n, 4096, %out)
+    return %s
+}
+fn @load_asset(%dir:ptr<u8>, %len:u64, %name:ptr<u8>, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %path = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %size = stack u64, 1
+    %s = call @snake_path(%dir, %len, %name, %path)
+    %ok = eq %s, 0
+    branch %ok, ^load(%path, %data, %size), ^error(%s)
+^load(%path:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %size:ptr<u64>):
+    %buf = load %path
+    call @std_bytes_view(%buf, %data, %size)
+    %p = load %data
+    %n = load %size
+    %s = call @std_io_read_file(%p, %n, %limit, %out)
+    call @std_bytes_destroy(%buf)
+    return %s
+^error(%s:i32):
+    return %s
+}
+export c fn @snake_routes_close(%raw:ptr<void>) -> void {
+^entry:
+    %null = eq %raw, null
+    branch %null, ^done(), ^start()
+^start:
+    %r:ptr<Routes> = cast %raw
+    %cp = field %r, config
+    %c = load %cp
+    call @std_bytes_destroy(%c)
+    %array = field %r, assets
+    %assets:ptr<ptr<StdBuf>> = cast %array
+    jump ^loop(%assets, 0)
+^loop(%assets:ptr<ptr<StdBuf>>, %i:i64):
+    %done = eq %i, 5
+    branch %done, ^release(), ^asset(%assets, %i)
+^asset(%assets:ptr<ptr<StdBuf>>, %i:i64):
+    %slot = offset %assets, %i
+    %buf = load %slot
+    call @std_bytes_destroy(%buf)
+    %next = add %i, 1
+    jump ^loop(%assets, %next)
+^release:
+    call @std_core_release(%raw)
+    return
+^done:
+    return
+}
+export c fn @snake_routes_new(%config:ptr<StdJson>, %app:ptr<void>, %dir:ptr<u8>, %len:u64, %out:ptr<ptr<void>>) -> i32 {
+^entry:
+    %slot = stack ptr<Routes>, 1
+    %raw:ptr<ptr<void>> = cast %slot
+    %size = sizeof Routes
+    %s = call @std_core_allocate(1, %size, %raw)
+    %ok = eq %s, 0
+    branch %ok, ^config(%slot), ^error(%s)
+^config(%slot:ptr<ptr<Routes>>):
+    %r = load %slot
+    %ap = field %r, app
+    store %ap, %app
+    %limit = call @snake_setting(%config, 15)
+    %max = call @snake_setting(%config, 16)
+    %l:u64 = cast %limit
+    %m:u64 = cast %max
+    %lp = field %r, limit
+    %mp = field %r, asset_limit
+    store %lp, %l
+    store %mp, %m
+    %cp = field %r, config
+    %s = call @snake_config_body(%config, %cp)
+    %ok = eq %s, 0
+    branch %ok, ^assets(%r, %m, 0), ^cleanup(%r, %s)
+^assets(%r:ptr<Routes>, %max:u64, %i:i32):
+    %done = eq %i, 5
+    branch %done, ^ready(%r), ^asset(%r, %max, %i)
+^asset(%r:ptr<Routes>, %max:u64, %i:i32):
+    %names = address @names
+    %name = call @snake_word(%names, %i)
+    %array = field %r, assets
+    %assets:ptr<ptr<StdBuf>> = cast %array
+    %index:i64 = cast %i
+    %slot = offset %assets, %index
+    %s = call @load_asset(%dir, %len, %name, %max, %slot)
+    %ok = eq %s, 0
+    %next = add %i, 1
+    branch %ok, ^assets(%r, %max, %next), ^cleanup(%r, %s)
+^ready(%r:ptr<Routes>):
+    %raw:ptr<void> = cast %r
+    store %out, %raw
+    return 0
+^cleanup(%r:ptr<Routes>, %s:i32):
+    %raw:ptr<void> = cast %r
+    call @snake_routes_close(%raw)
+    return %s
+^error(%s:i32):
+    return %s
+}
+fn @path_length(%data:ptr<u8>, %len:u64) -> u64 {
+^entry:
+    jump ^loop(0)
+^loop(%i:u64):
+    %done = eq %i, %len
+    branch %done, ^done(%i), ^byte(%i)
+^byte(%i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %query = eq %b, 63
+    %next = add %i, 1
+    branch %query, ^done(%i), ^loop(%next)
+^done(%i:u64):
+    return %i
+}
+fn @game(%r:ptr<Routes>, %req:ptr<StdHttp>, %id:ptr<u8>, %len:u64, %post:bool, %now:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %payload = stack ptr<StdJson>, 1
+    %result = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %size = stack u64, 1
+    store %payload, null
+    store %result, null
+    branch %post, ^body(%payload, %result, %data, %size), ^request(%payload, %result)
+^body(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %size:ptr<u64>):
+    call @std_http_body(%req, %data, %size)
+    %p = load %data
+    %n = load %size
+    %empty = eq %n, 0
+    branch %empty, ^http_error(%payload, %result, 413), ^parse(%payload, %result, %p, %n)
+^parse(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>, %p:ptr<u8>, %n:u64):
+    %s = call @std_json_parse(%p, %n, 16, %payload)
+    %ok = eq %s, 0
+    branch %ok, ^request(%payload, %result), ^parse_error(%payload, %result, %s)
+^parse_error(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>, %s:i32):
+    %oom = eq %s, 3
+    branch %oom, ^http_error(%payload, %result, 503), ^http_error(%payload, %result, 400)
+^request(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>):
+    %doc = load %payload
+    %ap = field %r, app
+    %app = load %ap
+    %code = call @snake_app_request(%app, %id, %len, %doc, %now, %result)
+    %ok = lt %code, 400
+    branch %ok, ^reply(%payload, %result, %code), ^http_error(%payload, %result, %code)
+^reply(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>, %code:i32):
+    %buf = load %result
+    %type = address @json
+    %lp = field %r, limit
+    %limit = load %lp
+    %s = call @reply_buffer(%code, %type, %buf, %limit, %out)
+    jump ^cleanup(%payload, %result, %s)
+^http_error(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>, %code:i32):
+    %s = call @snake_error(%code, %out)
+    jump ^cleanup(%payload, %result, %s)
+^cleanup(%payload:ptr<ptr<StdJson>>, %result:ptr<ptr<StdBuf>>, %s:i32):
+    %doc = load %payload
+    %buf = load %result
+    call @std_json_destroy(%doc)
+    call @std_bytes_destroy(%buf)
+    return %s
+}
+fn @route(%r:ptr<Routes>, %req:ptr<StdHttp>, %path:ptr<u8>, %len:u64, %post:bool, %now:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %key = address @games_path
+    %create = call @snake_eq(%path, %len, %key)
+    branch %create, ^create(), ^prefix()
+^create:
+    branch %post, ^game(null, 0), ^error(404)
+^prefix:
+    %long = gt %len, 11
+    branch %long, ^prefix_compare(), ^static()
+^prefix_compare:
+    %key = address @game_prefix
+    %c = call @std_bytes_compare(%path, 11, %key, 11)
+    %same = eq %c, 0
+    %id = offset %path, 11
+    %n = sub %len, 11
+    branch %same, ^game(%id, %n), ^static()
+^game(%id:ptr<u8>, %n:u64):
+    %s = call @game(%r, %req, %id, %n, %post, %now, %out)
+    return %s
+^static:
+    branch %post, ^error(404), ^config()
+^config:
+    %key = address @config_path
+    %same = call @snake_eq(%path, %len, %key)
+    branch %same, ^config_reply(), ^root()
+^config_reply:
+    %cp = field %r, config
+    %buf = load %cp
+    %lp = field %r, limit
+    %limit = load %lp
+    %type = address @json
+    %s = call @reply_buffer(200, %type, %buf, %limit, %out)
+    return %s
+^root:
+    %key = address @root
+    %same = call @snake_eq(%path, %len, %key)
+    branch %same, ^asset(0), ^paths(0)
+^paths(%i:i32):
+    %done = eq %i, 5
+    branch %done, ^error(404), ^path(%i)
+^path(%i:i32):
+    %paths = address @paths
+    %key = call @snake_word(%paths, %i)
+    %same = call @snake_eq(%path, %len, %key)
+    %next = add %i, 1
+    branch %same, ^asset(%i), ^paths(%next)
+^asset(%i:i32):
+    %array = field %r, assets
+    %assets:ptr<ptr<StdBuf>> = cast %array
+    %index:i64 = cast %i
+    %slot = offset %assets, %index
+    %buf = load %slot
+    %types = address @types
+    %type = call @snake_word(%types, %i)
+    %lp = field %r, asset_limit
+    %limit = load %lp
+    %total = add %limit, 1024
+    %s = call @reply_buffer(200, %type, %buf, %total, %out)
+    return %s
+^error(%code:i32):
+    %s = call @snake_error(%code, %out)
+    return %s
+}
+export c fn @snake_route(%raw:ptr<void>, %req:ptr<StdHttp>, %now:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %method = call @std_http_method(%req)
+    %get = eq %method, 1
+    branch %get, ^path(%data, %len, false), ^post(%data, %len, %method)
+^post(%data:ptr<ptr<u8>>, %len:ptr<u64>, %method:i32):
+    %post = eq %method, 2
+    branch %post, ^origin(%data, %len), ^error(405)
+^origin(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %ok = call @std_http_same_origin(%req)
+    branch %ok, ^type(%data, %len), ^error(403)
+^type(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %ok = call @std_http_json_content(%req)
+    branch %ok, ^path(%data, %len, true), ^error(415)
+^path(%data:ptr<ptr<u8>>, %len:ptr<u64>, %post:bool):
+    call @std_http_target(%req, %data, %len)
+    %p = load %data
+    %n = load %len
+    %size = call @path_length(%p, %n)
+    %routes:ptr<Routes> = cast %raw
+    %s = call @route(%routes, %req, %p, %size, %post, %now, %out)
+    return %s
+^error(%code:i32):
+    %s = call @snake_error(%code, %out)
+    return %s
+}

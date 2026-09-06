@@ -10,7 +10,10 @@ Before implementing a utility, query `build/lm0 library list`, then
 Add `use std_MODULE` to v2 source; signatures and dependencies are supplied by
 the compiler. Do not redeclare imported functions or types. `make` builds the
 bundled archive; executable/shared builds link it automatically.
-See [libraries.md](libraries.md) for the library workflow and examples.
+See [libraries.md](libraries.md) for the library workflow and examples. The
+networking modules are native-facing: use `std_net` only with bounded polling,
+and keep HTTP parser state separate per connection. `std_http` does not provide
+TLS, DNS, chunked transfer encoding, pipelining, or implicit request buffering.
 
 Library contracts specify which results are statuses. Check fallible `i32`
 results before reading output slots: 0 succeeds; nonzero indicates failure.

@@ -1,0 +1,570 @@
+module snake_application version 2
+use std_json
+use std_random
+
+extern c fn @snake_create(%width:i32, %height:i32, %initial:i32, %seed:u32, %wrap:i32, %points:i32) -> ptr<void>
+extern c fn @snake_destroy(%game:ptr<void>) -> void
+extern c fn @snake_control(%game:ptr<void>, %action:i32, %direction:i32) -> i32
+extern c fn @snake_read(%game:ptr<void>, %selector:i32) -> i32
+extern c fn @snake_setting(%doc:ptr<StdJson>, %index:i32) -> i64
+extern c fn @snake_member(%node:ptr<StdJsonNode>, %key:ptr<u8>) -> ptr<StdJsonNode>
+extern c fn @snake_integer(%node:ptr<StdJsonNode>, %out:ptr<i64>) -> i32
+extern c fn @snake_string(%node:ptr<StdJsonNode>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> i32
+extern c fn @snake_eq(%data:ptr<u8>, %len:u64, %word:ptr<u8>) -> bool
+extern c fn @snake_put(%buf:ptr<StdBuf>, %word:ptr<u8>) -> i32
+extern c fn @snake_word(%list:ptr<u8>, %index:i32) -> ptr<u8>
+
+struct Session {
+    game:ptr<void>
+    mode:i32
+    speed:i32
+    touched:u64
+    id:[u8;36]
+}
+struct Store {
+    config:ptr<StdJson>
+    sessions:ptr<Session>
+    capacity:i64
+    ttl:u64
+}
+data @mode = "mode\u0000"
+data @speed = "speed\u0000"
+data @action = "action\u0000"
+data @direction = "direction\u0000"
+data @classic = "classic\u0000"
+data @wrap = "wrap\u0000"
+data @reset = "reset\u0000"
+data @start = "start\u0000"
+data @pause = "pause\u0000"
+data @step = "step\u0000"
+data @hex = "0123456789abcdef"
+data @begin = "{\"id\":\"\u0000"
+data @mode_head = "\",\"mode\":\u0000"
+data @modes = "\"classic\"\u0000\"wrap\"\u0000"
+data @speed_head = ",\"speed\":\u0000"
+data @status_head = ",\"status\":\u0000"
+data @states = "\"ready\"\u0000\"running\"\u0000\"paused\"\u0000\"lost\"\u0000\"won\"\u0000"
+data @numbers = ",\"direction\":\u0000,\"food\":\u0000,\"length\":\u0000,\"score\":\u0000,\"ticks\":\u0000"
+data @reason_head = ",\"reason\":\u0000"
+data @reasons = "null\u0000\"wall\"\u0000\"self\"\u0000"
+data @body_head = ",\"body\":[\u0000"
+data @end = "]}\u0000"
+
+export c fn @snake_app_new(%config:ptr<StdJson>, %out:ptr<ptr<void>>) -> i32 {
+^entry:
+    %slot = stack ptr<Store>, 1
+    %raw:ptr<ptr<void>> = cast %slot
+    %size = sizeof Store
+    %s = call @std_core_allocate(1, %size, %raw)
+    %ok = eq %s, 0
+    branch %ok, ^sessions(%slot), ^error(%s)
+^sessions(%slot:ptr<ptr<Store>>):
+    %store = load %slot
+    %cp = field %store, config
+    store %cp, %config
+    %n = call @snake_setting(%config, 8)
+    %capacity = field %store, capacity
+    store %capacity, %n
+    %count:u64 = cast %n
+    %sp = field %store, sessions
+    %raw:ptr<ptr<void>> = cast %sp
+    %size = sizeof Session
+    %s = call @std_core_allocate(%count, %size, %raw)
+    %ok = eq %s, 0
+    branch %ok, ^ready(%store), ^cleanup(%store, %s)
+^ready(%store:ptr<Store>):
+    %seconds = call @snake_setting(%config, 9)
+    %n:u64 = cast %seconds
+    %ttl = mul %n, 1000000000
+    %tp = field %store, ttl
+    store %tp, %ttl
+    %raw:ptr<void> = cast %store
+    store %out, %raw
+    return 0
+^cleanup(%store:ptr<Store>, %s:i32):
+    %raw:ptr<void> = cast %store
+    call @std_core_release(%raw)
+    return %s
+^error(%s:i32):
+    return %s
+}
+export c fn @snake_app_expire(%raw:ptr<void>, %now:u64) -> void {
+^entry:
+    %store:ptr<Store> = cast %raw
+    %sp = field %store, sessions
+    %cp = field %store, capacity
+    %tp = field %store, ttl
+    %sessions = load %sp
+    %capacity = load %cp
+    %ttl = load %tp
+    jump ^loop(%sessions, %capacity, %ttl, 0)
+^loop(%sessions:ptr<Session>, %capacity:i64, %ttl:u64, %i:i64):
+    %done = eq %i, %capacity
+    branch %done, ^done(), ^session(%sessions, %capacity, %ttl, %i)
+^session(%sessions:ptr<Session>, %capacity:i64, %ttl:u64, %i:i64):
+    %session = offset %sessions, %i
+    %gp = field %session, game
+    %game = load %gp
+    %null = eq %game, null
+    branch %null, ^next(%sessions, %capacity, %ttl, %i), ^time(%sessions, %capacity, %ttl, %i, %session, %gp, %game)
+^time(%sessions:ptr<Session>, %capacity:i64, %ttl:u64, %i:i64, %session:ptr<Session>, %gp:ptr<ptr<void>>, %game:ptr<void>):
+    %tp = field %session, touched
+    %then = load %tp
+    %forward = ge %now, %then
+    branch %forward, ^age(%sessions, %capacity, %ttl, %i, %gp, %game, %then), ^next(%sessions, %capacity, %ttl, %i)
+^age(%sessions:ptr<Session>, %capacity:i64, %ttl:u64, %i:i64, %gp:ptr<ptr<void>>, %game:ptr<void>, %then:u64):
+    %age = sub %now, %then
+    %expired = gt %age, %ttl
+    branch %expired, ^expire(%sessions, %capacity, %ttl, %i, %gp, %game), ^next(%sessions, %capacity, %ttl, %i)
+^expire(%sessions:ptr<Session>, %capacity:i64, %ttl:u64, %i:i64, %gp:ptr<ptr<void>>, %game:ptr<void>):
+    call @snake_destroy(%game)
+    store %gp, null
+    jump ^next(%sessions, %capacity, %ttl, %i)
+^next(%sessions:ptr<Session>, %capacity:i64, %ttl:u64, %i:i64):
+    %next = add %i, 1
+    jump ^loop(%sessions, %capacity, %ttl, %next)
+^done:
+    return
+}
+export c fn @snake_app_close(%raw:ptr<void>) -> void {
+^entry:
+    %null = eq %raw, null
+    branch %null, ^done(), ^start()
+^start:
+    %store:ptr<Store> = cast %raw
+    %sp = field %store, sessions
+    %cp = field %store, capacity
+    %sessions = load %sp
+    %capacity = load %cp
+    jump ^loop(%sessions, %capacity, 0)
+^loop(%sessions:ptr<Session>, %capacity:i64, %i:i64):
+    %done = eq %i, %capacity
+    branch %done, ^free(%sessions), ^release(%sessions, %capacity, %i)
+^release(%sessions:ptr<Session>, %capacity:i64, %i:i64):
+    %session = offset %sessions, %i
+    %gp = field %session, game
+    %game = load %gp
+    call @snake_destroy(%game)
+    %next = add %i, 1
+    jump ^loop(%sessions, %capacity, %next)
+^free(%sessions:ptr<Session>):
+    %base:ptr<void> = cast %sessions
+    call @std_core_release(%base)
+    call @std_core_release(%raw)
+    return
+^done:
+    return
+}
+fn @find(%store:ptr<Store>, %id:ptr<u8>, %len:u64) -> ptr<Session> {
+^entry:
+    %sp = field %store, sessions
+    %cp = field %store, capacity
+    %sessions = load %sp
+    %capacity = load %cp
+    jump ^loop(%sessions, %capacity, 0)
+^loop(%sessions:ptr<Session>, %capacity:i64, %i:i64):
+    %done = eq %i, %capacity
+    branch %done, ^missing(), ^session(%sessions, %capacity, %i)
+^session(%sessions:ptr<Session>, %capacity:i64, %i:i64):
+    %session = offset %sessions, %i
+    %gp = field %session, game
+    %game = load %gp
+    %empty = eq %game, null
+    %create = eq %len, 0
+    branch %create, ^vacant(%sessions, %capacity, %i, %session, %empty), ^live(%sessions, %capacity, %i, %session, %empty)
+^vacant(%sessions:ptr<Session>, %capacity:i64, %i:i64, %session:ptr<Session>, %empty:bool):
+    branch %empty, ^found(%session), ^next(%sessions, %capacity, %i)
+^live(%sessions:ptr<Session>, %capacity:i64, %i:i64, %session:ptr<Session>, %empty:bool):
+    branch %empty, ^next(%sessions, %capacity, %i), ^compare(%sessions, %capacity, %i, %session)
+^compare(%sessions:ptr<Session>, %capacity:i64, %i:i64, %session:ptr<Session>):
+    %ip = field %session, id
+    %key:ptr<u8> = cast %ip
+    %c = call @std_bytes_compare(%id, %len, %key, 36)
+    %same = eq %c, 0
+    branch %same, ^found(%session), ^next(%sessions, %capacity, %i)
+^next(%sessions:ptr<Session>, %capacity:i64, %i:i64):
+    %next = add %i, 1
+    jump ^loop(%sessions, %capacity, %next)
+^found(%session:ptr<Session>):
+    return %session
+^missing:
+    return null
+}
+fn @options(%config:ptr<StdJson>, %session:ptr<Session>, %payload:ptr<StdJsonNode>, %mode:ptr<i32>, %speed:ptr<i32>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %number = stack i64, 1
+    %gp = field %session, game
+    %game = load %gp
+    %fresh = eq %game, null
+    branch %fresh, ^defaults(%data, %len, %number), ^existing(%data, %len, %number)
+^defaults(%data:ptr<ptr<u8>>, %len:ptr<u64>, %number:ptr<i64>):
+    %v = call @snake_setting(%config, 4)
+    %s:i32 = cast %v
+    store %mode, 0
+    store %speed, %s
+    jump ^mode(%data, %len, %number)
+^existing(%data:ptr<ptr<u8>>, %len:ptr<u64>, %number:ptr<i64>):
+    %mp = field %session, mode
+    %sp = field %session, speed
+    %m = load %mp
+    %s = load %sp
+    store %mode, %m
+    store %speed, %s
+    jump ^mode(%data, %len, %number)
+^mode(%data:ptr<ptr<u8>>, %len:ptr<u64>, %number:ptr<i64>):
+    %key = address @mode
+    %node = call @snake_member(%payload, %key)
+    %missing = eq %node, null
+    branch %missing, ^speed(%number), ^mode_string(%data, %len, %number, %node)
+^mode_string(%data:ptr<ptr<u8>>, %len:ptr<u64>, %number:ptr<i64>, %node:ptr<StdJsonNode>):
+    %s = call @snake_string(%node, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^classic(%data, %len, %number), ^invalid()
+^classic(%data:ptr<ptr<u8>>, %len:ptr<u64>, %number:ptr<i64>):
+    %p = load %data
+    %n = load %len
+    %word = address @classic
+    %same = call @snake_eq(%p, %n, %word)
+    branch %same, ^set_mode(%number, 0), ^wrap(%number, %p, %n)
+^wrap(%number:ptr<i64>, %p:ptr<u8>, %n:u64):
+    %word = address @wrap
+    %same = call @snake_eq(%p, %n, %word)
+    branch %same, ^set_mode(%number, 1), ^invalid()
+^set_mode(%number:ptr<i64>, %m:i32):
+    store %mode, %m
+    jump ^speed(%number)
+^speed(%number:ptr<i64>):
+    %key = address @speed
+    %node = call @snake_member(%payload, %key)
+    %missing = eq %node, null
+    branch %missing, ^good(), ^speed_value(%number, %node)
+^speed_value(%number:ptr<i64>, %node:ptr<StdJsonNode>):
+    %s = call @snake_integer(%node, %number)
+    %ok = eq %s, 0
+    branch %ok, ^range(%number), ^invalid()
+^range(%number:ptr<i64>):
+    %v = load %number
+    %min = call @snake_setting(%config, 5)
+    %max = call @snake_setting(%config, 6)
+    %fits = ge %v, %min
+    branch %fits, ^max(%v, %max), ^invalid()
+^max(%v:i64, %max:i64):
+    %fits = le %v, %max
+    branch %fits, ^set_speed(%v), ^invalid()
+^set_speed(%v:i64):
+    %s:i32 = cast %v
+    store %speed, %s
+    return 0
+^good:
+    return 0
+^invalid:
+    return 400
+}
+fn @new_game(%config:ptr<StdJson>, %mode:i32, %seed:u32) -> ptr<void> {
+^entry:
+    %w = call @snake_setting(%config, 0)
+    %h = call @snake_setting(%config, 1)
+    %i = call @snake_setting(%config, 2)
+    %p = call @snake_setting(%config, 3)
+    %width:i32 = cast %w
+    %height:i32 = cast %h
+    %initial:i32 = cast %i
+    %points:i32 = cast %p
+    %game = call @snake_create(%width, %height, %initial, %seed, %mode, %points)
+    return %game
+}
+fn @reset_game(%config:ptr<StdJson>, %session:ptr<Session>, %payload:ptr<StdJsonNode>, %only_speed:bool) -> i32 {
+^entry:
+    %mode = stack i32, 1
+    %speed = stack i32, 1
+    %seed = stack u32, 1
+    %s = call @options(%config, %session, %payload, %mode, %speed)
+    %ok = eq %s, 0
+    branch %ok, ^kind(%mode, %speed, %seed), ^error(%s)
+^kind(%mode:ptr<i32>, %speed:ptr<i32>, %seed:ptr<u32>):
+    branch %only_speed, ^speed(%speed), ^entropy(%mode, %speed, %seed)
+^entropy(%mode:ptr<i32>, %speed:ptr<i32>, %seed:ptr<u32>):
+    %bytes:ptr<u8> = cast %seed
+    %s = call @std_random_secure(%bytes, 4)
+    %ok = eq %s, 0
+    branch %ok, ^new(%mode, %speed, %seed), ^error(503)
+^new(%mode:ptr<i32>, %speed:ptr<i32>, %seed:ptr<u32>):
+    %m = load %mode
+    %r = load %seed
+    %game = call @new_game(%config, %m, %r)
+    %ok = ne %game, null
+    branch %ok, ^replace(%speed, %m, %game), ^error(503)
+^replace(%speed:ptr<i32>, %m:i32, %game:ptr<void>):
+    %gp = field %session, game
+    %old = load %gp
+    call @snake_destroy(%old)
+    store %gp, %game
+    %mp = field %session, mode
+    store %mp, %m
+    jump ^speed(%speed)
+^speed(%speed:ptr<i32>):
+    %s = load %speed
+    %sp = field %session, speed
+    store %sp, %s
+    return 200
+^error(%s:i32):
+    return %s
+}
+fn @command(%config:ptr<StdJson>, %session:ptr<Session>, %payload:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %number = stack i64, 1
+    %key = address @action
+    %node = call @snake_member(%payload, %key)
+    %s = call @snake_string(%node, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^action(%data, %len, %number), ^bad()
+^action(%data:ptr<ptr<u8>>, %len:ptr<u64>, %number:ptr<i64>):
+    %p = load %data
+    %n = load %len
+    %reset = address @reset
+    %same = call @snake_eq(%p, %n, %reset)
+    branch %same, ^reset(false), ^speed(%p, %n, %number)
+^speed(%p:ptr<u8>, %n:u64, %number:ptr<i64>):
+    %speed = address @speed
+    %same = call @snake_eq(%p, %n, %speed)
+    branch %same, ^reset(true), ^start(%p, %n, %number)
+^reset(%speed:bool):
+    %s = call @reset_game(%config, %session, %payload, %speed)
+    return %s
+^start(%p:ptr<u8>, %n:u64, %number:ptr<i64>):
+    %start = address @start
+    %same = call @snake_eq(%p, %n, %start)
+    branch %same, ^direction(%number, 0), ^pause(%p, %n, %number)
+^pause(%p:ptr<u8>, %n:u64, %number:ptr<i64>):
+    %pause = address @pause
+    %same = call @snake_eq(%p, %n, %pause)
+    branch %same, ^direction(%number, 1), ^step(%p, %n, %number)
+^step(%p:ptr<u8>, %n:u64, %number:ptr<i64>):
+    %step = address @step
+    %same = call @snake_eq(%p, %n, %step)
+    branch %same, ^direction(%number, 2), ^bad()
+^direction(%number:ptr<i64>, %action:i32):
+    %key = address @direction
+    %node = call @snake_member(%payload, %key)
+    %missing = eq %node, null
+    branch %missing, ^apply(%action, -1), ^integer(%number, %action, %node)
+^integer(%number:ptr<i64>, %action:i32, %node:ptr<StdJsonNode>):
+    %s = call @snake_integer(%node, %number)
+    %ok = eq %s, 0
+    branch %ok, ^min(%number, %action), ^bad()
+^min(%number:ptr<i64>, %action:i32):
+    %v = load %number
+    %valid = ge %v, -1
+    branch %valid, ^max(%action, %v), ^bad()
+^max(%action:i32, %v:i64):
+    %valid = le %v, 3
+    %direction:i32 = cast %v
+    branch %valid, ^apply(%action, %direction), ^bad()
+^apply(%action:i32, %direction:i32):
+    %gp = field %session, game
+    %game = load %gp
+    %state = call @snake_control(%game, %action, %direction)
+    return 200
+^bad:
+    return 400
+}
+fn @identifier(%store:ptr<Store>, %session:ptr<Session>) -> i32 {
+^entry:
+    %bytes = stack u8, 18
+    jump ^attempt(%bytes, 0)
+^attempt(%bytes:ptr<u8>, %tries:i32):
+    %s = call @std_random_secure(%bytes, 18)
+    %ok = eq %s, 0
+    branch %ok, ^encode(%bytes, %tries, 0), ^failed()
+^encode(%bytes:ptr<u8>, %tries:i32, %i:i64):
+    %done = eq %i, 18
+    branch %done, ^collision(%bytes, %tries), ^byte(%bytes, %tries, %i)
+^byte(%bytes:ptr<u8>, %tries:i32, %i:i64):
+    %bp = offset %bytes, %i
+    %b = load %bp
+    %lo = and %b, 15
+    %hi = shr %b, 4
+    %li:i64 = cast %lo
+    %hiidx:i64 = cast %hi
+    %hex = address @hex
+    %lp = offset %hex, %li
+    %hp = offset %hex, %hiidx
+    %lv = load %lp
+    %hv = load %hp
+    %id = field %session, id
+    %base:ptr<u8> = cast %id
+    %index = mul %i, 2
+    %dest = offset %base, %index
+    %dest2 = offset %dest, 1
+    store %dest, %hv
+    store %dest2, %lv
+    %next = add %i, 1
+    jump ^encode(%bytes, %tries, %next)
+^collision(%bytes:ptr<u8>, %tries:i32):
+    %id = field %session, id
+    %base:ptr<u8> = cast %id
+    %existing = call @find(%store, %base, 36)
+    %unique = eq %existing, null
+    branch %unique, ^ok(), ^retry(%bytes, %tries)
+^retry(%bytes:ptr<u8>, %tries:i32):
+    %next = add %tries, 1
+    %again = lt %next, 8
+    branch %again, ^attempt(%bytes, %next), ^failed()
+^ok:
+    return 0
+^failed:
+    return 503
+}
+
+# The caller reserves 32768 bytes; validated boards bound this JSON below 25000.
+fn @snapshot(%session:ptr<Session>, %buf:ptr<StdBuf>) -> void {
+^entry:
+    %gp = field %session, game
+    %game = load %gp
+    %start = address @begin
+    %s1 = call @snake_put(%buf, %start)
+    %ip = field %session, id
+    %id:ptr<u8> = cast %ip
+    %s2 = call @std_bytes_append(%buf, %id, 36)
+    %mh = address @mode_head
+    %s3 = call @snake_put(%buf, %mh)
+    %mp = field %session, mode
+    %mode = load %mp
+    %modes = address @modes
+    %modeword = call @snake_word(%modes, %mode)
+    %s4 = call @snake_put(%buf, %modeword)
+    %sh = address @speed_head
+    %s5 = call @snake_put(%buf, %sh)
+    %sp = field %session, speed
+    %speed = load %sp
+    %speed64:i64 = cast %speed
+    %s6 = call @std_text_format_i64(%speed64, %buf)
+    %sth = address @status_head
+    %s7 = call @snake_put(%buf, %sth)
+    %state = call @snake_read(%game, 0)
+    %states = address @states
+    %word = call @snake_word(%states, %state)
+    %s8 = call @snake_put(%buf, %word)
+    jump ^numbers(%game, 1)
+^numbers(%game:ptr<void>, %i:i32):
+    %done = eq %i, 6
+    branch %done, ^reason(%game), ^number(%game, %i)
+^number(%game:ptr<void>, %i:i32):
+    %keys = address @numbers
+    %idx = sub %i, 1
+    %key = call @snake_word(%keys, %idx)
+    %s1 = call @snake_put(%buf, %key)
+    %value = call @snake_read(%game, %i)
+    %v:i64 = cast %value
+    %s2 = call @std_text_format_i64(%v, %buf)
+    %next = add %i, 1
+    jump ^numbers(%game, %next)
+^reason(%game:ptr<void>):
+    %head = address @reason_head
+    %s1 = call @snake_put(%buf, %head)
+    %reason = call @snake_read(%game, 6)
+    %reasons = address @reasons
+    %word = call @snake_word(%reasons, %reason)
+    %s2 = call @snake_put(%buf, %word)
+    %body = address @body_head
+    %s3 = call @snake_put(%buf, %body)
+    %n = call @snake_read(%game, 3)
+    jump ^body(%game, %n, 0)
+^body(%game:ptr<void>, %n:i32, %i:i32):
+    %done = eq %i, %n
+    branch %done, ^done(), ^comma(%game, %n, %i)
+^comma(%game:ptr<void>, %n:i32, %i:i32):
+    %first = eq %i, 0
+    branch %first, ^cell(%game, %n, %i), ^separator(%game, %n, %i)
+^separator(%game:ptr<void>, %n:i32, %i:i32):
+    %s = call @std_bytes_push(%buf, 44)
+    jump ^cell(%game, %n, %i)
+^cell(%game:ptr<void>, %n:i32, %i:i32):
+    %selector = add %i, 7
+    %cell = call @snake_read(%game, %selector)
+    %v:i64 = cast %cell
+    %s = call @std_text_format_i64(%v, %buf)
+    %next = add %i, 1
+    jump ^body(%game, %n, %next)
+^done:
+    %end = address @end
+    %s = call @snake_put(%buf, %end)
+    return
+}
+fn @request(%store:ptr<Store>, %id:ptr<u8>, %len:u64, %payload:ptr<StdJson>, %now:u64, %buf:ptr<StdBuf>) -> i32 {
+^entry:
+    %has_payload = ne %payload, null
+    branch %has_payload, ^payload(), ^lookup(null)
+^payload:
+    %node = call @std_json_root(%payload)
+    %kind = call @std_json_kind(%node)
+    %object = eq %kind, 6
+    branch %object, ^lookup(%node), ^error(400)
+^lookup(%node:ptr<StdJsonNode>):
+    %session = call @find(%store, %id, %len)
+    %cp = field %store, config
+    %config = load %cp
+    %create = eq %len, 0
+    branch %create, ^create(%session, %config, %node), ^access(%session, %config, %node)
+^create(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %space = ne %session, null
+    branch %space, ^new_payload(%session, %config, %node), ^error(503)
+^new_payload(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %null = eq %node, null
+    branch %null, ^error(404), ^id(%session, %config, %node)
+^id(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %s = call @identifier(%store, %session)
+    %ok = eq %s, 0
+    branch %ok, ^create_game(%session, %config, %node), ^error(%s)
+^create_game(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %s = call @reset_game(%config, %session, %node, false)
+    %ok = eq %s, 200
+    branch %ok, ^snapshot(%session, 201), ^error(%s)
+^access(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %exists = ne %session, null
+    branch %exists, ^command(%session, %config, %node), ^error(404)
+^command(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %get = eq %node, null
+    branch %get, ^snapshot(%session, 200), ^apply(%session, %config, %node)
+^apply(%session:ptr<Session>, %config:ptr<StdJson>, %node:ptr<StdJsonNode>):
+    %s = call @command(%config, %session, %node)
+    %ok = eq %s, 200
+    branch %ok, ^snapshot(%session, 200), ^error(%s)
+^snapshot(%session:ptr<Session>, %code:i32):
+    %tp = field %session, touched
+    store %tp, %now
+    call @snapshot(%session, %buf)
+    return %code
+^error(%code:i32):
+    return %code
+}
+export c fn @snake_app_request(%raw:ptr<void>, %id:ptr<u8>, %len:u64, %payload:ptr<StdJson>, %now:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %s = call @std_bytes_new(%slot)
+    %ok = eq %s, 0
+    branch %ok, ^reserve(%slot), ^failed()
+^reserve(%slot:ptr<ptr<StdBuf>>):
+    %buf = load %slot
+    %s = call @std_bytes_reserve(%buf, 32768)
+    %ok = eq %s, 0
+    branch %ok, ^request(%buf), ^cleanup(%buf, 503)
+^request(%buf:ptr<StdBuf>):
+    call @snake_app_expire(%raw, %now)
+    %store:ptr<Store> = cast %raw
+    %code = call @request(%store, %id, %len, %payload, %now, %buf)
+    %ok = lt %code, 400
+    branch %ok, ^done(%buf, %code), ^cleanup(%buf, %code)
+^done(%buf:ptr<StdBuf>, %code:i32):
+    store %out, %buf
+    return %code
+^cleanup(%buf:ptr<StdBuf>, %code:i32):
+    call @std_bytes_destroy(%buf)
+    return %code
+^failed:
+    return 503
+}

@@ -1,0 +1,885 @@
+module http version 2
+use std_text
+
+data @tokens = "!#$%&'*+-.^_`|~"
+data @get = "GET"
+data @post = "POST"
+data @v10 = "HTTP/1.0"
+data @v11 = "HTTP/1.1"
+data @host = "host"
+data @length = "content-length"
+data @transfer = "transfer-encoding"
+data @expect = "expect"
+data @origin = "origin"
+data @content = "content-type"
+data @start = "HTTP/1.1 "
+data @length_head = " LM0\r\nContent-Length: "
+data @close_head = "\r\nConnection: close\r\n"
+data @crlf = "\r\n"
+data @http_scheme = "http://"
+data @json_type = "application/json"
+
+fn @byte(%data:ptr<u8>, %index:u64) -> u8 {
+^entry:
+    %i:i64 = cast %index
+    %p = offset %data, %i
+    %v = load %p
+    return %v
+}
+fn @token(%v:u8) -> bool {
+^entry:
+    %n = sub %v, 48
+    %digit = le %n, 9
+    branch %digit, ^yes(), ^alpha()
+^alpha:
+    %lower = or %v, 32
+    %n = sub %lower, 97
+    %letter = le %n, 25
+    branch %letter, ^yes(), ^punct(0)
+^punct(%i:u64):
+    %p = address @tokens
+    %b = call @byte(%p, %i)
+    %same = eq %v, %b
+    branch %same, ^yes(), ^next(%i)
+^next(%i:u64):
+    %n = add %i, 1
+    %more = lt %n, 15
+    branch %more, ^punct(%n), ^no()
+^yes:
+    return true
+^no:
+    return false
+}
+fn @equal(%data:ptr<u8>, %len:u64, %key:ptr<u8>, %size:u64) -> bool {
+^entry:
+    %same = eq %len, %size
+    branch %same, ^loop(0), ^no()
+^loop(%i:u64):
+    %end = eq %i, %size
+    branch %end, ^yes(), ^compare(%i)
+^compare(%i:u64):
+    %a = call @byte(%data, %i)
+    %b = call @byte(%key, %i)
+    %delta = sub %a, 65
+    %upper = le %delta, 25
+    branch %upper, ^lower(%i, %a, %b), ^test(%i, %a, %b)
+^lower(%i:u64, %a:u8, %b:u8):
+    %v = add %a, 32
+    jump ^test(%i, %v, %b)
+^test(%i:u64, %a:u8, %b:u8):
+    %d = sub %b, 65
+    %upper = le %d, 25
+    branch %upper, ^lower_key(%i, %a, %b), ^same(%i, %a, %b)
+^lower_key(%i:u64, %a:u8, %b:u8):
+    %v = add %b, 32
+    jump ^same(%i, %a, %v)
+^same(%i:u64, %a:u8, %b:u8):
+    %same = eq %a, %b
+    %next = add %i, 1
+    branch %same, ^loop(%next), ^no()
+^yes:
+    return true
+^no:
+    return false
+}
+
+# Split a validated header line into name and trimmed value, retaining offsets.
+fn @parts(%data:ptr<u8>, %start:u64, %end:u64, %name:ptr<u64>, %value:ptr<u64>, %size:ptr<u64>) -> i32 {
+^entry:
+    jump ^key(%start)
+^key(%i:u64):
+    %done = eq %i, %end
+    branch %done, ^invalid(), ^key_byte(%i)
+^key_byte(%i:u64):
+    %b = call @byte(%data, %i)
+    %colon = eq %b, 58
+    branch %colon, ^colon(%i), ^key_token(%i, %b)
+^key_token(%i:u64, %b:u8):
+    %ok = call @token(%b)
+    %n = add %i, 1
+    branch %ok, ^key(%n), ^invalid()
+^colon(%i:u64):
+    %empty = eq %i, %start
+    %n = sub %i, %start
+    store %name, %n
+    %next = add %i, 1
+    branch %empty, ^invalid(), ^trim_left(%next)
+^trim_left(%i:u64):
+    %done = eq %i, %end
+    branch %done, ^trimmed(%i, %i), ^left_byte(%i)
+^left_byte(%i:u64):
+    %b = call @byte(%data, %i)
+    %space = eq %b, 32
+    %next = add %i, 1
+    branch %space, ^trim_left(%next), ^left_tab(%i, %b, %next)
+^left_tab(%i:u64, %b:u8, %next:u64):
+    %tab = eq %b, 9
+    branch %tab, ^trim_left(%next), ^trim_right(%i, %end)
+^trim_right(%start_value:u64, %e:u64):
+    %empty = eq %start_value, %e
+    branch %empty, ^trimmed(%start_value, %e), ^right_byte(%start_value, %e)
+^right_byte(%start_value:u64, %e:u64):
+    %last = sub %e, 1
+    %b = call @byte(%data, %last)
+    %space = eq %b, 32
+    branch %space, ^trim_right(%start_value, %last), ^right_tab(%start_value, %e, %last, %b)
+^right_tab(%start_value:u64, %e:u64, %last:u64, %b:u8):
+    %tab = eq %b, 9
+    branch %tab, ^trim_right(%start_value, %last), ^trimmed(%start_value, %e)
+^trimmed(%s:u64, %e:u64):
+    store %value, %s
+    %n = sub %e, %s
+    store %size, %n
+    jump ^validate(%s, %e)
+^validate(%i:u64, %e:u64):
+    %done = eq %i, %e
+    branch %done, ^ok(), ^value_byte(%i, %e)
+^value_byte(%i:u64, %e:u64):
+    %b = call @byte(%data, %i)
+    %tab = eq %b, 9
+    %n = add %i, 1
+    branch %tab, ^validate(%n, %e), ^control(%b, %n, %e)
+^control(%b:u8, %n:u64, %e:u64):
+    %low = lt %b, 32
+    branch %low, ^invalid(), ^delete(%b, %n, %e)
+^delete(%b:u8, %n:u64, %e:u64):
+    %del = eq %b, 127
+    branch %del, ^invalid(), ^validate(%n, %e)
+^ok:
+    return 0
+^invalid:
+    return 6
+}
+
+fn @lookup(%p:ptr<StdHttp>, %end:u64, %name:ptr<u8>, %size:u64, %out:ptr<ptr<u8>>, %len:ptr<u64>) -> i32 {
+^entry:
+    %kn = stack u64, 1
+    %vs = stack u64, 1
+    %vn = stack u64, 1
+    %bp = field %p, buf
+    %buf = load %bp
+    %dp = field %buf, data
+    %data = load %dp
+    jump ^scan(%kn, %vs, %vn, %data, 0, 0, true)
+^scan(%kn:ptr<u64>, %vs:ptr<u64>, %vn:ptr<u64>, %data:ptr<u8>, %i:u64, %line:u64, %first:bool):
+    %done = ge %i, %end
+    branch %done, ^missing(), ^byte(%kn, %vs, %vn, %data, %i, %line, %first)
+^byte(%kn:ptr<u64>, %vs:ptr<u64>, %vn:ptr<u64>, %data:ptr<u8>, %i:u64, %line:u64, %first:bool):
+    %b = call @byte(%data, %i)
+    %lf = eq %b, 10
+    %next = add %i, 1
+    branch %lf, ^line(%kn, %vs, %vn, %data, %i, %line, %next, %first), ^scan(%kn, %vs, %vn, %data, %next, %line, %first)
+^line(%kn:ptr<u64>, %vs:ptr<u64>, %vn:ptr<u64>, %data:ptr<u8>, %i:u64, %line:u64, %next:u64, %first:bool):
+    branch %first, ^scan(%kn, %vs, %vn, %data, %next, %next, false), ^header(%kn, %vs, %vn, %data, %i, %line, %next)
+^header(%kn:ptr<u64>, %vs:ptr<u64>, %vn:ptr<u64>, %data:ptr<u8>, %i:u64, %line:u64, %next:u64):
+    %e = sub %i, 1
+    %s = call @parts(%data, %line, %e, %kn, %vs, %vn)
+    %valid = eq %s, 0
+    branch %valid, ^compare(%kn, %vs, %vn, %data, %line, %next), ^missing()
+^compare(%kn:ptr<u64>, %vs:ptr<u64>, %vn:ptr<u64>, %data:ptr<u8>, %line:u64, %next:u64):
+    %idx:i64 = cast %line
+    %key = offset %data, %idx
+    %n = load %kn
+    %same = call @equal(%key, %n, %name, %size)
+    branch %same, ^found(%vs, %vn, %data), ^scan(%kn, %vs, %vn, %data, %next, %next, false)
+^found(%vs:ptr<u64>, %vn:ptr<u64>, %data:ptr<u8>):
+    %v = load %vs
+    %idx:i64 = cast %v
+    %value = offset %data, %idx
+    %n = load %vn
+    store %out, %value
+    store %len, %n
+    return 0
+^missing:
+    return 4
+}
+
+fn @request_line(%p:ptr<StdHttp>, %data:ptr<u8>, %end:u64) -> i32 {
+^entry:
+    jump ^method(0)
+^method(%i:u64):
+    %done = eq %i, %end
+    branch %done, ^bad(), ^method_byte(%i)
+^method_byte(%i:u64):
+    %b = call @byte(%data, %i)
+    %space = eq %b, 32
+    branch %space, ^method_end(%i), ^method_token(%i, %b)
+^method_token(%i:u64, %b:u8):
+    %ok = call @token(%b)
+    %next = add %i, 1
+    branch %ok, ^method(%next), ^bad()
+^method_end(%i:u64):
+    %empty = eq %i, 0
+    branch %empty, ^bad(), ^select(%i)
+^select(%i:u64):
+    %get = address @get
+    %c = call @std_bytes_compare(%data, %i, %get, 3)
+    %isget = eq %c, 0
+    branch %isget, ^set_method(%i, 1), ^post(%i)
+^post(%i:u64):
+    %post = address @post
+    %c = call @std_bytes_compare(%data, %i, %post, 4)
+    %ispost = eq %c, 0
+    branch %ispost, ^set_method(%i, 2), ^set_method(%i, 3)
+^set_method(%i:u64, %m:i32):
+    %mp = field %p, method
+    store %mp, %m
+    %start = add %i, 1
+    %tp = field %p, target
+    store %tp, %start
+    %fits = lt %start, %end
+    branch %fits, ^slash(%start), ^bad()
+^slash(%start:u64):
+    %b = call @byte(%data, %start)
+    %ok = eq %b, 47
+    branch %ok, ^target(%start, %start), ^bad()
+^target(%i:u64, %start:u64):
+    %done = eq %i, %end
+    branch %done, ^bad(), ^target_byte(%i, %start)
+^target_byte(%i:u64, %start:u64):
+    %b = call @byte(%data, %i)
+    %space = eq %b, 32
+    branch %space, ^version(%i, %start), ^target_valid(%i, %start, %b)
+^target_valid(%i:u64, %start:u64, %b:u8):
+    %d = sub %b, 33
+    %ok = le %d, 93
+    branch %ok, ^fragment(%i, %start, %b), ^bad()
+^fragment(%i:u64, %start:u64, %b:u8):
+    %bad = eq %b, 35
+    %next = add %i, 1
+    branch %bad, ^bad(), ^target(%next, %start)
+^version(%i:u64, %start:u64):
+    %n = sub %i, %start
+    %np = field %p, target_len
+    store %np, %n
+    %vstart = add %i, 1
+    %vlen = sub %end, %vstart
+    %idx:i64 = cast %vstart
+    %v = offset %data, %idx
+    %ref = address @v11
+    %c = call @std_bytes_compare(%v, %vlen, %ref, 8)
+    %same = eq %c, 0
+    branch %same, ^v11(), ^v10(%v, %vlen)
+^v11:
+    %vp = field %p, version
+    store %vp, 1
+    return 0
+^v10(%v:ptr<u8>, %n:u64):
+    %ref = address @v10
+    %c = call @std_bytes_compare(%v, %n, %ref, 8)
+    %same = eq %c, 0
+    branch %same, ^ok(), ^bad()
+^ok:
+    return 0
+^bad:
+    return 400
+}
+
+fn @header_line(%p:ptr<StdHttp>, %data:ptr<u8>, %start:u64, %end:u64) -> i32 {
+^entry:
+    %kn = stack u64, 1
+    %vs = stack u64, 1
+    %vn = stack u64, 1
+    %old = stack ptr<u8>, 1
+    %oldn = stack u64, 1
+    %number = stack u64, 1
+    %s = call @parts(%data, %start, %end, %kn, %vs, %vn)
+    %ok = eq %s, 0
+    branch %ok, ^values(%kn, %vs, %vn, %old, %oldn, %number), ^bad()
+^values(%kn:ptr<u64>, %vs:ptr<u64>, %vn:ptr<u64>, %old:ptr<ptr<u8>>, %oldn:ptr<u64>, %number:ptr<u64>):
+    %n = load %kn
+    %v = load %vs
+    %size = load %vn
+    %si:i64 = cast %start
+    %vi:i64 = cast %v
+    %key = offset %data, %si
+    %value = offset %data, %vi
+    %transfer = address @transfer
+    %te = call @equal(%key, %n, %transfer, 17)
+    branch %te, ^transfer(), ^expect(%key, %n, %value, %size, %old, %oldn, %number)
+^expect(%key:ptr<u8>, %n:u64, %value:ptr<u8>, %size:u64, %old:ptr<ptr<u8>>, %oldn:ptr<u64>, %number:ptr<u64>):
+    %ref = address @expect
+    %match = call @equal(%key, %n, %ref, 6)
+    branch %match, ^expect_error(), ^duplicates(%key, %n, %value, %size, %old, %oldn, %number)
+^duplicates(%key:ptr<u8>, %n:u64, %value:ptr<u8>, %size:u64, %old:ptr<ptr<u8>>, %oldn:ptr<u64>, %number:ptr<u64>):
+    %ref = address @origin
+    %match = call @equal(%key, %n, %ref, 6)
+    branch %match, ^unique(%key, %n, %old, %oldn), ^content(%key, %n, %value, %size, %old, %oldn, %number)
+^content(%key:ptr<u8>, %n:u64, %value:ptr<u8>, %size:u64, %old:ptr<ptr<u8>>, %oldn:ptr<u64>, %number:ptr<u64>):
+    %ref = address @content
+    %match = call @equal(%key, %n, %ref, 12)
+    branch %match, ^unique(%key, %n, %old, %oldn), ^host(%key, %n, %value, %size, %number)
+^unique(%key:ptr<u8>, %n:u64, %old:ptr<ptr<u8>>, %oldn:ptr<u64>):
+    %s = call @lookup(%p, %start, %key, %n, %old, %oldn)
+    %missing = eq %s, 4
+    branch %missing, ^ok(), ^bad()
+^host(%key:ptr<u8>, %n:u64, %value:ptr<u8>, %size:u64, %number:ptr<u64>):
+    %ref = address @host
+    %match = call @equal(%key, %n, %ref, 4)
+    branch %match, ^host_seen(%size), ^length(%key, %n, %value, %size, %number)
+^host_seen(%size:u64):
+    %hp = field %p, host_seen
+    %old = load %hp
+    %duplicate = ne %old, 0
+    store %hp, 1
+    branch %duplicate, ^bad(), ^host_empty(%size)
+^host_empty(%size:u64):
+    %empty = eq %size, 0
+    branch %empty, ^bad(), ^ok()
+^length(%key:ptr<u8>, %n:u64, %value:ptr<u8>, %size:u64, %number:ptr<u64>):
+    %ref = address @length
+    %match = call @equal(%key, %n, %ref, 14)
+    branch %match, ^length_seen(%value, %size, %number), ^ok()
+^length_seen(%value:ptr<u8>, %size:u64, %number:ptr<u64>):
+    %lp = field %p, length_seen
+    %old = load %lp
+    %duplicate = ne %old, 0
+    store %lp, 1
+    branch %duplicate, ^bad(), ^parse_length(%value, %size, %number)
+^parse_length(%value:ptr<u8>, %size:u64, %number:ptr<u64>):
+    %s = call @std_text_parse_u64(%value, %size, %number)
+    %ok = eq %s, 0
+    branch %ok, ^limit(%number), ^bad()
+^limit(%number:ptr<u64>):
+    %n = load %number
+    %bp = field %p, body_limit
+    %max = load %bp
+    %fits = le %n, %max
+    branch %fits, ^store_length(%n), ^large()
+^store_length(%n:u64):
+    %lp = field %p, length
+    store %lp, %n
+    return 0
+^ok:
+    return 0
+^bad:
+    return 400
+^large:
+    return 413
+^transfer:
+    return 501
+^expect_error:
+    return 417
+}
+
+export c fn @std_http_new(%header_limit:u64, %body_limit:u64, %header_count:u64, %out:ptr<ptr<StdHttp>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdHttp>, 1
+    %zero = eq %header_limit, 0
+    branch %zero, ^invalid(), ^count(%slot)
+^count(%slot:ptr<ptr<StdHttp>>):
+    %zero = eq %header_count, 0
+    branch %zero, ^invalid(), ^range(%slot)
+^range(%slot:ptr<ptr<StdHttp>>):
+    %fits = le %header_limit, 9223372036854775807
+    branch %fits, ^sum(%slot), ^invalid()
+^sum(%slot:ptr<ptr<StdHttp>>):
+    %room = sub 9223372036854775807:u64, %header_limit
+    %fits = le %body_limit, %room
+    branch %fits, ^allocate(%slot), ^invalid()
+^allocate(%slot:ptr<ptr<StdHttp>>):
+    %raw:ptr<ptr<void>> = cast %slot
+    %size = sizeof StdHttp
+    %s = call @std_core_allocate(1, %size, %raw)
+    %ok = eq %s, 0
+    branch %ok, ^buffer(%slot), ^error(%s)
+^buffer(%slot:ptr<ptr<StdHttp>>):
+    %p = load %slot
+    %bp = field %p, buf
+    %s = call @std_bytes_new(%bp)
+    %ok = eq %s, 0
+    branch %ok, ^initialize(%p), ^cleanup(%p, %s)
+^initialize(%p:ptr<StdHttp>):
+    %hp = field %p, header_limit
+    %bp = field %p, body_limit
+    %cp = field %p, count_limit
+    store %hp, %header_limit
+    store %bp, %body_limit
+    store %cp, %header_count
+    store %out, %p
+    return 0
+^cleanup(%p:ptr<StdHttp>, %s:i32):
+    %raw:ptr<void> = cast %p
+    call @std_core_release(%raw)
+    return %s
+^invalid:
+    return 1
+^error(%s:i32):
+    return %s
+}
+export c fn @std_http_destroy(%p:ptr<StdHttp>) -> void {
+^entry:
+    %null = eq %p, null
+    branch %null, ^done(), ^free()
+^free:
+    %bp = field %p, buf
+    %buf = load %bp
+    call @std_bytes_destroy(%buf)
+    %raw:ptr<void> = cast %p
+    call @std_core_release(%raw)
+    return
+^done:
+    return
+}
+export c fn @std_http_reset(%p:ptr<StdHttp>) -> void {
+^entry:
+    %bp = field %p, buf
+    %buf = load %bp
+    call @std_bytes_clear(%buf)
+    %state = field %p, state
+    %scan = field %p, scan
+    %line = field %p, line
+    %head = field %p, head
+    %length = field %p, length
+    %method = field %p, method
+    %target = field %p, target
+    %target_len = field %p, target_len
+    %version = field %p, version
+    %headers = field %p, headers
+    %host = field %p, host_seen
+    %seen = field %p, length_seen
+    %error = field %p, error
+    store %state, 0
+    store %scan, 0
+    store %line, 0
+    store %head, 0
+    store %length, 0
+    store %method, 0
+    store %target, 0
+    store %target_len, 0
+    store %version, 0
+    store %headers, 0
+    store %host, 0
+    store %seen, 0
+    store %error, 0
+    return
+}
+fn @failure(%p:ptr<StdHttp>, %code:i32) -> i32 {
+^entry:
+    %ep = field %p, error
+    %sp = field %p, state
+    store %ep, %code
+    store %sp, 4
+    %large = eq %code, 413
+    branch %large, ^limit(), ^headers()
+^headers:
+    %large = eq %code, 431
+    branch %large, ^limit(), ^parse()
+^limit:
+    return 9
+^parse:
+    return 6
+}
+export c fn @std_http_feed(%p:ptr<StdHttp>, %data:ptr<u8>, %len:u64, %ready:ptr<bool>) -> i32 {
+^entry:
+    %sp = field %p, state
+    %state = load %sp
+    %stopped = ge %state, 3
+    branch %stopped, ^invalid(), ^capacity()
+^capacity:
+    %hp = field %p, header_limit
+    %bp = field %p, body_limit
+    %h = load %hp
+    %b = load %bp
+    %max = add %h, %b
+    %bufp = field %p, buf
+    %buf = load %bufp
+    %np = field %buf, len
+    %n = load %np
+    %room = sub %max, %n
+    %fits = le %len, %room
+    branch %fits, ^append(%buf), ^failed(413)
+^append(%buf:ptr<StdBuf>):
+    %s = call @std_bytes_append(%buf, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^parse(%buf), ^error(%s)
+^parse(%buf:ptr<StdBuf>):
+    %dp = field %buf, data
+    %np = field %buf, len
+    %base = load %dp
+    %n = load %np
+    %sp = field %p, state
+    %state = load %sp
+    %body = eq %state, 2
+    branch %body, ^body(%n), ^scan_start(%base, %n)
+^scan_start(%base:ptr<u8>, %n:u64):
+    %ip = field %p, scan
+    %i = load %ip
+    jump ^scan(%base, %n, %i)
+^scan(%base:ptr<u8>, %n:u64, %i:u64):
+    %done = eq %i, %n
+    branch %done, ^incomplete(), ^header_limit(%base, %n, %i)
+^header_limit(%base:ptr<u8>, %n:u64, %i:u64):
+    %hp = field %p, header_limit
+    %max = load %hp
+    %fits = lt %i, %max
+    branch %fits, ^scan_byte(%base, %n, %i), ^failed(431)
+^scan_byte(%base:ptr<u8>, %n:u64, %i:u64):
+    %b = call @byte(%base, %i)
+    %lf = eq %b, 10
+    %next = add %i, 1
+    %ip = field %p, scan
+    store %ip, %next
+    branch %lf, ^newline(%base, %n, %i, %next), ^scan(%base, %n, %next)
+^newline(%base:ptr<u8>, %n:u64, %i:u64, %next:u64):
+    %lp = field %p, line
+    %line = load %lp
+    %empty = eq %line, %i
+    branch %empty, ^failed(400), ^cr(%base, %n, %i, %next, %line)
+^cr(%base:ptr<u8>, %n:u64, %i:u64, %next:u64, %line:u64):
+    %end = sub %i, 1
+    %b = call @byte(%base, %end)
+    %cr = eq %b, 13
+    branch %cr, ^line_kind(%base, %n, %end, %next, %line), ^failed(400)
+^line_kind(%base:ptr<u8>, %n:u64, %end:u64, %next:u64, %line:u64):
+    %sp = field %p, state
+    %state = load %sp
+    %first = eq %state, 0
+    branch %first, ^request(%base, %n, %end, %next), ^header(%base, %n, %end, %next, %line)
+^request(%base:ptr<u8>, %n:u64, %end:u64, %next:u64):
+    %s = call @request_line(%p, %base, %end)
+    %ok = eq %s, 0
+    branch %ok, ^request_done(%base, %n, %next), ^failed(%s)
+^request_done(%base:ptr<u8>, %n:u64, %next:u64):
+    %sp = field %p, state
+    store %sp, 1
+    jump ^next_line(%base, %n, %next)
+^header(%base:ptr<u8>, %n:u64, %end:u64, %next:u64, %line:u64):
+    %empty = eq %line, %end
+    branch %empty, ^headers_done(%n, %next), ^count(%base, %n, %end, %next, %line)
+^count(%base:ptr<u8>, %n:u64, %end:u64, %next:u64, %line:u64):
+    %cp = field %p, headers
+    %lp = field %p, count_limit
+    %c = load %cp
+    %limit = load %lp
+    %fits = lt %c, %limit
+    %inc = add %c, 1
+    store %cp, %inc
+    branch %fits, ^parse_header(%base, %n, %end, %next, %line), ^failed(431)
+^parse_header(%base:ptr<u8>, %n:u64, %end:u64, %next:u64, %line:u64):
+    %s = call @header_line(%p, %base, %line, %end)
+    %ok = eq %s, 0
+    branch %ok, ^next_line(%base, %n, %next), ^failed(%s)
+^next_line(%base:ptr<u8>, %n:u64, %next:u64):
+    %lp = field %p, line
+    store %lp, %next
+    jump ^scan(%base, %n, %next)
+^headers_done(%n:u64, %next:u64):
+    %vp = field %p, version
+    %hp = field %p, host_seen
+    %v = load %vp
+    %h = load %hp
+    %valid = le %v, %h
+    branch %valid, ^body_start(%n, %next), ^failed(400)
+^body_start(%n:u64, %next:u64):
+    %hp = field %p, head
+    %sp = field %p, state
+    store %hp, %next
+    store %sp, 2
+    jump ^body(%n)
+^body(%n:u64):
+    %hp = field %p, head
+    %lp = field %p, length
+    %head = load %hp
+    %length = load %lp
+    %total = add %head, %length
+    %done = ge %n, %total
+    branch %done, ^complete(), ^incomplete()
+^complete:
+    %sp = field %p, state
+    store %sp, 3
+    store %ready, true
+    return 0
+^incomplete:
+    store %ready, false
+    return 0
+^failed(%code:i32):
+    %s = call @failure(%p, %code)
+    return %s
+^invalid:
+    return 1
+^error(%s:i32):
+    return %s
+}
+export c fn @std_http_error(%p:ptr<StdHttp>) -> i32 {
+^entry:
+    %ep = field %p, error
+    %e = load %ep
+    return %e
+}
+export c fn @std_http_method(%p:ptr<StdHttp>) -> i32 {
+^entry:
+    %mp = field %p, method
+    %m = load %mp
+    return %m
+}
+fn @view(%p:ptr<StdHttp>, %start:u64, %size:u64, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> void {
+^entry:
+    %bp = field %p, buf
+    %buf = load %bp
+    %dp = field %buf, data
+    %base = load %dp
+    %i:i64 = cast %start
+    %v = offset %base, %i
+    store %data, %v
+    store %len, %size
+    return
+}
+export c fn @std_http_target(%p:ptr<StdHttp>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> void {
+^entry:
+    %tp = field %p, target
+    %np = field %p, target_len
+    %t = load %tp
+    %n = load %np
+    call @view(%p, %t, %n, %data, %len)
+    return
+}
+export c fn @std_http_body(%p:ptr<StdHttp>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> void {
+^entry:
+    %hp = field %p, head
+    %np = field %p, length
+    %h = load %hp
+    %n = load %np
+    call @view(%p, %h, %n, %data, %len)
+    return
+}
+export c fn @std_http_header(%p:ptr<StdHttp>, %name:ptr<u8>, %len:u64, %data:ptr<ptr<u8>>, %size:ptr<u64>) -> i32 {
+^entry:
+    %hp = field %p, head
+    %end = load %hp
+    %s = call @lookup(%p, %end, %name, %len, %data, %size)
+    return %s
+}
+
+fn @authority(%data:ptr<u8>, %len:u64, %port:ptr<u64>) -> u64 {
+^entry:
+    store %port, 80
+    %empty = eq %len, 0
+    branch %empty, ^bad(), ^first()
+^first:
+    %b = load %data
+    %bracket = eq %b, 91
+    branch %bracket, ^ipv6(1), ^host(0)
+^ipv6(%i:u64):
+    %done = eq %i, %len
+    branch %done, ^bad(), ^ipv6_byte(%i)
+^ipv6_byte(%i:u64):
+    %b = call @byte(%data, %i)
+    %end = eq %b, 93
+    branch %end, ^bracket_end(%i), ^ipv6_char(%i, %b)
+^ipv6_char(%i:u64, %b:u8):
+    %colon = eq %b, 58
+    %next = add %i, 1
+    branch %colon, ^ipv6(%next), ^ipv6_dot(%next, %b)
+^ipv6_dot(%next:u64, %b:u8):
+    %dot = eq %b, 46
+    branch %dot, ^ipv6(%next), ^ipv6_digit(%next, %b)
+^ipv6_digit(%next:u64, %b:u8):
+    %d = sub %b, 48
+    %digit = le %d, 9
+    branch %digit, ^ipv6(%next), ^ipv6_hex(%next, %b)
+^ipv6_hex(%next:u64, %b:u8):
+    %low = or %b, 32
+    %d = sub %low, 97
+    %hex = le %d, 5
+    branch %hex, ^ipv6(%next), ^bad()
+^bracket_end(%i:u64):
+    %empty = eq %i, 1
+    %end = add %i, 1
+    branch %empty, ^bad(), ^host_end(%end)
+^host(%i:u64):
+    %done = eq %i, %len
+    branch %done, ^host_end(%i), ^host_byte(%i)
+^host_byte(%i:u64):
+    %b = call @byte(%data, %i)
+    %colon = eq %b, 58
+    branch %colon, ^host_end(%i), ^host_char(%i, %b)
+^host_char(%i:u64, %b:u8):
+    %n = add %i, 1
+    %d = sub %b, 48
+    %digit = le %d, 9
+    branch %digit, ^host(%n), ^host_letter(%n, %b)
+^host_letter(%n:u64, %b:u8):
+    %low = or %b, 32
+    %d = sub %low, 97
+    %letter = le %d, 25
+    branch %letter, ^host(%n), ^host_dot(%n, %b)
+^host_dot(%n:u64, %b:u8):
+    %dot = eq %b, 46
+    branch %dot, ^host(%n), ^host_dash(%n, %b)
+^host_dash(%n:u64, %b:u8):
+    %dash = eq %b, 45
+    branch %dash, ^host(%n), ^bad()
+^host_end(%n:u64):
+    %empty = eq %n, 0
+    branch %empty, ^bad(), ^port_check(%n)
+^port_check(%n:u64):
+    %end = eq %n, %len
+    branch %end, ^done(%n), ^colon(%n)
+^colon(%n:u64):
+    %b = call @byte(%data, %n)
+    %colon = eq %b, 58
+    branch %colon, ^port(%n), ^bad()
+^port(%n:u64):
+    %next = add %n, 1
+    %size = sub %len, %next
+    %index:i64 = cast %next
+    %p = offset %data, %index
+    %s = call @std_text_parse_u64(%p, %size, %port)
+    %ok = eq %s, 0
+    branch %ok, ^port_range(%n), ^bad()
+^port_range(%n:u64):
+    %v = load %port
+    %valid = le %v, 65535
+    branch %valid, ^port_zero(%n, %v), ^bad()
+^port_zero(%n:u64, %v:u64):
+    %valid = ne %v, 0
+    branch %valid, ^done(%n), ^bad()
+^done(%n:u64):
+    return %n
+^bad:
+    return 0
+}
+export c fn @std_http_same_origin(%p:ptr<StdHttp>) -> bool {
+^entry:
+    %od = stack ptr<u8>, 1
+    %on = stack u64, 1
+    %hd = stack ptr<u8>, 1
+    %hn = stack u64, 1
+    %op = stack u64, 1
+    %hp = stack u64, 1
+    %key = address @origin
+    %s = call @std_http_header(%p, %key, 6, %od, %on)
+    %missing = eq %s, 4
+    branch %missing, ^yes(), ^host(%od, %on, %hd, %hn, %op, %hp)
+^host(%od:ptr<ptr<u8>>, %on:ptr<u64>, %hd:ptr<ptr<u8>>, %hn:ptr<u64>, %op:ptr<u64>, %hp:ptr<u64>):
+    %key = address @host
+    %s = call @std_http_header(%p, %key, 4, %hd, %hn)
+    %ok = eq %s, 0
+    branch %ok, ^scheme_length(%od, %on, %hd, %hn, %op, %hp), ^no()
+^scheme_length(%od:ptr<ptr<u8>>, %on:ptr<u64>, %hd:ptr<ptr<u8>>, %hn:ptr<u64>, %op:ptr<u64>, %hp:ptr<u64>):
+    %n = load %on
+    %o = load %od
+    %long = gt %n, 7
+    branch %long, ^scheme(%o, %n, %hd, %hn, %op, %hp), ^no()
+^scheme(%o:ptr<u8>, %n:u64, %hd:ptr<ptr<u8>>, %hn:ptr<u64>, %op:ptr<u64>, %hp:ptr<u64>):
+    %ref = address @http_scheme
+    %ok = call @equal(%o, 7, %ref, 7)
+    %data = offset %o, 7
+    %len = sub %n, 7
+    branch %ok, ^authorities(%data, %len, %hd, %hn, %op, %hp), ^no()
+^authorities(%data:ptr<u8>, %len:u64, %hd:ptr<ptr<u8>>, %hn:ptr<u64>, %op:ptr<u64>, %hp:ptr<u64>):
+    %host = load %hd
+    %n = load %hn
+    %an = call @authority(%data, %len, %op)
+    %bn = call @authority(%host, %n, %hp)
+    %valid = ne %an, 0
+    branch %valid, ^names(%data, %an, %host, %bn, %op, %hp), ^no()
+^names(%data:ptr<u8>, %an:u64, %host:ptr<u8>, %bn:u64, %op:ptr<u64>, %hp:ptr<u64>):
+    %same = call @equal(%data, %an, %host, %bn)
+    branch %same, ^ports(%op, %hp), ^no()
+^ports(%op:ptr<u64>, %hp:ptr<u64>):
+    %a = load %op
+    %b = load %hp
+    %same = eq %a, %b
+    return %same
+^yes:
+    return true
+^no:
+    return false
+}
+export c fn @std_http_json_content(%p:ptr<StdHttp>) -> bool {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %key = address @content
+    %s = call @std_http_header(%p, %key, 12, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^length(%data, %len), ^no()
+^length(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %n = load %len
+    %d = load %data
+    %fits = ge %n, 16
+    branch %fits, ^name(%d, %n), ^no()
+^name(%d:ptr<u8>, %n:u64):
+    %ref = address @json_type
+    %same = call @equal(%d, 16, %ref, 16)
+    branch %same, ^suffix(%d, %n, 16), ^no()
+^suffix(%d:ptr<u8>, %n:u64, %i:u64):
+    %done = eq %i, %n
+    branch %done, ^yes(), ^byte(%d, %n, %i)
+^byte(%d:ptr<u8>, %n:u64, %i:u64):
+    %b = call @byte(%d, %i)
+    %semicolon = eq %b, 59
+    branch %semicolon, ^yes(), ^space(%d, %n, %i, %b)
+^space(%d:ptr<u8>, %n:u64, %i:u64, %b:u8):
+    %space = eq %b, 32
+    %next = add %i, 1
+    branch %space, ^suffix(%d, %n, %next), ^tab(%d, %n, %next, %b)
+^tab(%d:ptr<u8>, %n:u64, %next:u64, %b:u8):
+    %tab = eq %b, 9
+    branch %tab, ^suffix(%d, %n, %next), ^no()
+^yes:
+    return true
+^no:
+    return false
+}
+
+export c fn @std_http_response(%code:i32, %headers:ptr<u8>, %header_len:u64, %body:ptr<u8>, %body_len:u64, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %valid = ge %code, 100
+    branch %valid, ^status(%slot), ^invalid()
+^status(%slot:ptr<ptr<StdBuf>>):
+    %valid = le %code, 599
+    branch %valid, ^lengths(%slot), ^invalid()
+^lengths(%slot:ptr<ptr<StdBuf>>):
+    %fits = le %header_len, 9223372036854775679
+    branch %fits, ^body_limit(%slot), ^large()
+^body_limit(%slot:ptr<ptr<StdBuf>>):
+    %room = sub 9223372036854775679:u64, %header_len
+    %fits = le %body_len, %room
+    branch %fits, ^new(%slot), ^large()
+^new(%slot:ptr<ptr<StdBuf>>):
+    %s = call @std_bytes_new(%slot)
+    %ok = eq %s, 0
+    branch %ok, ^reserve(%slot), ^error(%s)
+^reserve(%slot:ptr<ptr<StdBuf>>):
+    %buf = load %slot
+    %a = add %header_len, %body_len
+    %capacity = add %a, 128
+    %s = call @std_bytes_reserve(%buf, %capacity)
+    %ok = eq %s, 0
+    branch %ok, ^write(%buf), ^cleanup(%buf, %s)
+^write(%buf:ptr<StdBuf>):
+    %start = address @start
+    %s1 = call @std_bytes_append(%buf, %start, 9)
+    %number:u64 = cast %code
+    %s2 = call @std_text_format_u64(%number, %buf)
+    %lh = address @length_head
+    %s3 = call @std_bytes_append(%buf, %lh, 22)
+    %s4 = call @std_text_format_u64(%body_len, %buf)
+    %ch = address @close_head
+    %s5 = call @std_bytes_append(%buf, %ch, 21)
+    %s6 = call @std_bytes_append(%buf, %headers, %header_len)
+    %crlf = address @crlf
+    %s7 = call @std_bytes_append(%buf, %crlf, 2)
+    %np = field %buf, len
+    %head = load %np
+    %total = add %head, %body_len
+    %fits = le %total, %limit
+    branch %fits, ^body(%buf), ^cleanup(%buf, 9)
+^body(%buf:ptr<StdBuf>):
+    %s = call @std_bytes_append(%buf, %body, %body_len)
+    store %out, %buf
+    return 0
+^cleanup(%buf:ptr<StdBuf>, %s:i32):
+    call @std_bytes_destroy(%buf)
+    return %s
+^invalid:
+    return 1
+^large:
+    return 9
+^error(%s:i32):
+    return %s
+}

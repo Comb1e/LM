@@ -1,0 +1,842 @@
+module snake_server version 2
+use std_net
+use std_process
+use std_http
+use std_json
+use std_io
+use std_time
+
+extern c fn @snake_zlen(%text:ptr<u8>) -> u64
+extern c fn @snake_eq(%data:ptr<u8>, %len:u64, %word:ptr<u8>) -> bool
+extern c fn @snake_put(%buf:ptr<StdBuf>, %word:ptr<u8>) -> i32
+extern c fn @snake_default_path(%name:ptr<u8>, %out:ptr<ptr<StdBuf>>) -> i32
+extern c fn @snake_load(%path:ptr<u8>, %len:u64, %out:ptr<ptr<StdJson>>) -> i32
+extern c fn @snake_config_validate(%doc:ptr<StdJson>) -> i32
+extern c fn @snake_setting(%doc:ptr<StdJson>, %index:i32) -> i64
+extern c fn @snake_member(%node:ptr<StdJsonNode>, %key:ptr<u8>) -> ptr<StdJsonNode>
+extern c fn @snake_string(%node:ptr<StdJsonNode>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> i32
+extern c fn @snake_app_new(%config:ptr<StdJson>, %out:ptr<ptr<void>>) -> i32
+extern c fn @snake_app_close(%app:ptr<void>) -> void
+extern c fn @snake_app_expire(%app:ptr<void>, %now:u64) -> void
+extern c fn @snake_routes_new(%config:ptr<StdJson>, %app:ptr<void>, %dir:ptr<u8>, %len:u64, %out:ptr<ptr<void>>) -> i32
+extern c fn @snake_routes_close(%routes:ptr<void>) -> void
+extern c fn @snake_route(%routes:ptr<void>, %req:ptr<StdHttp>, %now:u64, %out:ptr<ptr<StdBuf>>) -> i32
+extern c fn @snake_error(%code:i32, %out:ptr<ptr<StdBuf>>) -> i32
+
+# Connection states: 0 vacant, 1 reading, 2 writing. One request per connection.
+struct Connection {
+    socket:ptr<StdSocket>
+    parser:ptr<StdHttp>
+    response:ptr<StdBuf>
+    state:i32
+    sent:u64
+    deadline:u64
+}
+struct Server {
+    config_path:ptr<StdBuf>
+    assets_path:ptr<StdBuf>
+    host:ptr<StdBuf>
+    port:i32
+    config:ptr<StdJson>
+    app:ptr<void>
+    routes:ptr<void>
+    listener:ptr<StdSocket>
+    guard:ptr<StdShutdown>
+    clients:ptr<Connection>
+    polls:ptr<StdPoll>
+    chunk:ptr<u8>
+    count:i64
+    timeout:u64
+    chunk_size:u64
+    poll_ms:i32
+    header_limit:u64
+    body_limit:u64
+    header_count:u64
+}
+data @config_name = "config.json\u0000"
+data @assets_name = "static\u0000"
+data @opt_config = "--config\u0000"
+data @opt_assets = "--assets\u0000"
+data @opt_host = "--host\u0000"
+data @opt_port = "--port\u0000"
+data @opt_help = "--help\u0000"
+data @server_key = "server\u0000"
+data @host_key = "host\u0000"
+data @usage = "Snake: [--config PATH] [--assets DIR] [--host IP|localhost] [--port 0..65535]\n\u0000"
+data @ready = "Snake ready at http://\u0000"
+data @failure = "Snake failed; status \u0000"
+data @colon = ":"
+
+fn @copy_buffer(%data:ptr<u8>, %len:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %s = call @std_bytes_new(%slot)
+    %ok = eq %s, 0
+    branch %ok, ^append(%slot), ^error(%s)
+^append(%slot:ptr<ptr<StdBuf>>):
+    %buf = load %slot
+    %s = call @std_bytes_append(%buf, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^replace(%buf), ^cleanup(%buf, %s)
+^replace(%buf:ptr<StdBuf>):
+    %old = load %out
+    call @std_bytes_destroy(%old)
+    store %out, %buf
+    return 0
+^cleanup(%buf:ptr<StdBuf>, %s:i32):
+    call @std_bytes_destroy(%buf)
+    return %s
+^error(%s:i32):
+    return %s
+}
+fn @option(%s:ptr<Server>, %key:ptr<u8>, %kn:u64, %value:ptr<u8>, %vn:u64) -> i32 {
+^entry:
+    %number = stack u64, 1
+    %name = address @opt_config
+    %same = call @snake_eq(%key, %kn, %name)
+    %slot = field %s, config_path
+    branch %same, ^copy(%slot), ^assets(%number)
+^assets(%number:ptr<u64>):
+    %name = address @opt_assets
+    %same = call @snake_eq(%key, %kn, %name)
+    %slot = field %s, assets_path
+    branch %same, ^copy(%slot), ^host(%number)
+^host(%number:ptr<u64>):
+    %name = address @opt_host
+    %same = call @snake_eq(%key, %kn, %name)
+    %slot = field %s, host
+    branch %same, ^copy(%slot), ^port(%number)
+^port(%number:ptr<u64>):
+    %name = address @opt_port
+    %same = call @snake_eq(%key, %kn, %name)
+    branch %same, ^port_number(%number), ^bad()
+^port_number(%number:ptr<u64>):
+    %status = call @std_text_parse_u64(%value, %vn, %number)
+    %ok = eq %status, 0
+    branch %ok, ^port_range(%number), ^bad()
+^port_range(%number:ptr<u64>):
+    %n = load %number
+    %valid = le %n, 65535
+    branch %valid, ^set_port(%n), ^bad()
+^set_port(%n:u64):
+    %port:i32 = cast %n
+    %p = field %s, port
+    store %p, %port
+    return 0
+^copy(%slot:ptr<ptr<StdBuf>>):
+    %status = call @copy_buffer(%value, %vn, %slot)
+    return %status
+^bad:
+    return 1
+}
+fn @arguments(%s:ptr<Server>, %argc:i32, %argv:ptr<ptr<u8>>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %value = stack ptr<u8>, 1
+    %vn = stack u64, 1
+    jump ^loop(%data, %len, %value, %vn, 1)
+^loop(%data:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<ptr<u8>>, %vn:ptr<u64>, %i:i32):
+    %done = eq %i, %argc
+    branch %done, ^done(), ^key(%data, %len, %value, %vn, %i)
+^key(%data:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<ptr<u8>>, %vn:ptr<u64>, %i:i32):
+    %status = call @std_process_argument(%argc, %argv, %i, %data, %len)
+    %p = load %data
+    %n = load %len
+    %help = address @opt_help
+    %same = call @snake_eq(%p, %n, %help)
+    branch %same, ^help(), ^value(%data, %len, %value, %vn, %i, %p, %n)
+^value(%data:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<ptr<u8>>, %vn:ptr<u64>, %i:i32, %p:ptr<u8>, %n:u64):
+    %next = add %i, 1
+    %status = call @std_process_argument(%argc, %argv, %next, %value, %vn)
+    %ok = eq %status, 0
+    branch %ok, ^option(%data, %len, %value, %vn, %next, %p, %n), ^bad()
+^option(%data:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<ptr<u8>>, %vn:ptr<u64>, %i:i32, %p:ptr<u8>, %n:u64):
+    %v = load %value
+    %size = load %vn
+    %status = call @option(%s, %p, %n, %v, %size)
+    %ok = eq %status, 0
+    %next = add %i, 1
+    branch %ok, ^loop(%data, %len, %value, %vn, %next), ^bad()
+^done:
+    return 0
+^help:
+    %text = address @usage
+    %len = call @snake_zlen(%text)
+    %status = call @std_io_stdout(%text, %len)
+    return -1
+^bad:
+    %text = address @usage
+    %len = call @snake_zlen(%text)
+    %status = call @std_io_stderr(%text, %len)
+    return 1
+}
+fn @configuration(%s:ptr<Server>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %cp = field %s, config_path
+    %ap = field %s, assets_path
+    %config = load %cp
+    %missing = eq %config, null
+    branch %missing, ^default_config(%data, %len, %cp, %ap), ^assets(%data, %len, %ap)
+^default_config(%data:ptr<ptr<u8>>, %len:ptr<u64>, %cp:ptr<ptr<StdBuf>>, %ap:ptr<ptr<StdBuf>>):
+    %name = address @config_name
+    %status = call @snake_default_path(%name, %cp)
+    %ok = eq %status, 0
+    branch %ok, ^assets(%data, %len, %ap), ^error(%status)
+^assets(%data:ptr<ptr<u8>>, %len:ptr<u64>, %ap:ptr<ptr<StdBuf>>):
+    %assets = load %ap
+    %missing = eq %assets, null
+    branch %missing, ^default_assets(%data, %len, %ap), ^load(%data, %len)
+^default_assets(%data:ptr<ptr<u8>>, %len:ptr<u64>, %ap:ptr<ptr<StdBuf>>):
+    %name = address @assets_name
+    %status = call @snake_default_path(%name, %ap)
+    %ok = eq %status, 0
+    branch %ok, ^load(%data, %len), ^error(%status)
+^load(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %cp = field %s, config_path
+    %path = load %cp
+    call @std_bytes_view(%path, %data, %len)
+    %p = load %data
+    %n = load %len
+    %docp = field %s, config
+    %status = call @snake_load(%p, %n, %docp)
+    %ok = eq %status, 0
+    branch %ok, ^validate(%data, %len, %docp), ^error(%status)
+^validate(%data:ptr<ptr<u8>>, %len:ptr<u64>, %docp:ptr<ptr<StdJson>>):
+    %doc = load %docp
+    %status = call @snake_config_validate(%doc)
+    %ok = eq %status, 0
+    branch %ok, ^host(%data, %len, %doc), ^error(%status)
+^host(%data:ptr<ptr<u8>>, %len:ptr<u64>, %doc:ptr<StdJson>):
+    %hp = field %s, host
+    %host = load %hp
+    %missing = eq %host, null
+    branch %missing, ^default_host(%data, %len, %doc, %hp), ^port(%doc)
+^default_host(%data:ptr<ptr<u8>>, %len:ptr<u64>, %doc:ptr<StdJson>, %hp:ptr<ptr<StdBuf>>):
+    %root = call @std_json_root(%doc)
+    %key = address @server_key
+    %server = call @snake_member(%root, %key)
+    %hkey = address @host_key
+    %node = call @snake_member(%server, %hkey)
+    %status = call @snake_string(%node, %data, %len)
+    %p = load %data
+    %n = load %len
+    %status2 = call @copy_buffer(%p, %n, %hp)
+    %ok = eq %status2, 0
+    branch %ok, ^port(%doc), ^error(%status2)
+^port(%doc:ptr<StdJson>):
+    %pp = field %s, port
+    %port = load %pp
+    %missing = eq %port, -1
+    branch %missing, ^default_port(%doc, %pp), ^done()
+^default_port(%doc:ptr<StdJson>, %pp:ptr<i32>):
+    %v = call @snake_setting(%doc, 7)
+    %port:i32 = cast %v
+    store %pp, %port
+    return 0
+^done:
+    return 0
+^error(%status:i32):
+    return %status
+}
+fn @settings(%s:ptr<Server>, %doc:ptr<StdJson>) -> void {
+^entry:
+    %n = call @snake_setting(%doc, 12)
+    %np = field %s, count
+    store %np, %n
+    %v = call @snake_setting(%doc, 11)
+    %u:u64 = cast %v
+    %ns = mul %u, 1000000000
+    %tp = field %s, timeout
+    store %tp, %ns
+    %c = call @snake_setting(%doc, 17)
+    %cu:u64 = cast %c
+    %cp = field %s, chunk_size
+    store %cp, %cu
+    %m = call @snake_setting(%doc, 18)
+    %ms:i32 = cast %m
+    %mp = field %s, poll_ms
+    store %mp, %ms
+    %h = call @snake_setting(%doc, 13)
+    %hu:u64 = cast %h
+    %hp = field %s, header_limit
+    store %hp, %hu
+    %b = call @snake_setting(%doc, 10)
+    %bu:u64 = cast %b
+    %bp = field %s, body_limit
+    store %bp, %bu
+    %hc = call @snake_setting(%doc, 14)
+    %hcu:u64 = cast %hc
+    %hcp = field %s, header_count
+    store %hcp, %hcu
+    return
+}
+fn @initialize(%s:ptr<Server>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %status = call @configuration(%s)
+    %ok = eq %status, 0
+    branch %ok, ^app(%data, %len), ^error(%status)
+^app(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %dp = field %s, config
+    %doc = load %dp
+    call @settings(%s, %doc)
+    %ap = field %s, app
+    %status = call @snake_app_new(%doc, %ap)
+    %ok = eq %status, 0
+    branch %ok, ^routes(%data, %len, %doc, %ap), ^error(%status)
+^routes(%data:ptr<ptr<u8>>, %len:ptr<u64>, %doc:ptr<StdJson>, %ap:ptr<ptr<void>>):
+    %app = load %ap
+    %pathp = field %s, assets_path
+    %path = load %pathp
+    call @std_bytes_view(%path, %data, %len)
+    %p = load %data
+    %n = load %len
+    %rp = field %s, routes
+    %status = call @snake_routes_new(%doc, %app, %p, %n, %rp)
+    %ok = eq %status, 0
+    branch %ok, ^clients(%data, %len), ^error(%status)
+^clients(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %np = field %s, count
+    %n = load %np
+    %count:u64 = cast %n
+    %cp = field %s, clients
+    %raw:ptr<ptr<void>> = cast %cp
+    %size = sizeof Connection
+    %status = call @std_core_allocate(%count, %size, %raw)
+    %ok = eq %status, 0
+    branch %ok, ^polls(%data, %len, %count), ^error(%status)
+^polls(%data:ptr<ptr<u8>>, %len:ptr<u64>, %count:u64):
+    %pp = field %s, polls
+    %raw:ptr<ptr<void>> = cast %pp
+    %size = sizeof StdPoll
+    %total = add %count, 1
+    %status = call @std_core_allocate(%total, %size, %raw)
+    %ok = eq %status, 0
+    branch %ok, ^chunk(%data, %len), ^error(%status)
+^chunk(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %cp = field %s, chunk
+    %np = field %s, chunk_size
+    %n = load %np
+    %raw:ptr<ptr<void>> = cast %cp
+    %status = call @std_core_allocate(%n, 1, %raw)
+    %ok = eq %status, 0
+    branch %ok, ^signals(%data, %len), ^error(%status)
+^signals(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %gp = field %s, guard
+    %status = call @std_process_shutdown_begin(%gp)
+    %ok = eq %status, 0
+    branch %ok, ^listen(%data, %len), ^error(%status)
+^listen(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %hp = field %s, host
+    %host = load %hp
+    call @std_bytes_view(%host, %data, %len)
+    %p = load %data
+    %n = load %len
+    %pp = field %s, port
+    %port = load %pp
+    %np = field %s, count
+    %count = load %np
+    %backlog:i32 = cast %count
+    %lp = field %s, listener
+    %status = call @std_net_listen(%p, %n, %port, %backlog, %lp)
+    %ok = eq %status, 0
+    branch %ok, ^port(%lp, %pp), ^error(%status)
+^port(%lp:ptr<ptr<StdSocket>>, %pp:ptr<i32>):
+    %listener = load %lp
+    %status = call @std_net_port(%listener, %pp)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @close_client(%c:ptr<Connection>) -> void {
+^entry:
+    %sp = field %c, socket
+    %pp = field %c, parser
+    %rp = field %c, response
+    %state = field %c, state
+    %sent = field %c, sent
+    %socket = load %sp
+    %parser = load %pp
+    %response = load %rp
+    %status = call @std_net_close(%socket)
+    call @std_http_destroy(%parser)
+    call @std_bytes_destroy(%response)
+    store %sp, null
+    store %pp, null
+    store %rp, null
+    store %state, 0
+    store %sent, 0
+    return
+}
+fn @destroy(%s:ptr<Server>) -> void {
+^entry:
+    %cp = field %s, clients
+    %np = field %s, count
+    %clients = load %cp
+    %count = load %np
+    %null = eq %clients, null
+    branch %null, ^release(), ^loop(%clients, %count, 0)
+^loop(%clients:ptr<Connection>, %count:i64, %i:i64):
+    %done = eq %i, %count
+    branch %done, ^free_clients(%clients), ^client(%clients, %count, %i)
+^client(%clients:ptr<Connection>, %count:i64, %i:i64):
+    %c = offset %clients, %i
+    call @close_client(%c)
+    %next = add %i, 1
+    jump ^loop(%clients, %count, %next)
+^free_clients(%clients:ptr<Connection>):
+    %raw:ptr<void> = cast %clients
+    call @std_core_release(%raw)
+    jump ^release()
+^release:
+    %pp = field %s, polls
+    %polls = load %pp
+    %praw:ptr<void> = cast %polls
+    call @std_core_release(%praw)
+    %cp = field %s, chunk
+    %chunk = load %cp
+    %craw:ptr<void> = cast %chunk
+    call @std_core_release(%craw)
+    %lp = field %s, listener
+    %listener = load %lp
+    %status = call @std_net_close(%listener)
+    %rp = field %s, routes
+    %routes = load %rp
+    call @snake_routes_close(%routes)
+    %ap = field %s, app
+    %app = load %ap
+    call @snake_app_close(%app)
+    %dp = field %s, config
+    %doc = load %dp
+    call @std_json_destroy(%doc)
+    %gp = field %s, guard
+    %guard = load %gp
+    call @std_process_shutdown_end(%guard)
+    %configp = field %s, config_path
+    %assetsp = field %s, assets_path
+    %hostp = field %s, host
+    %config = load %configp
+    %assets = load %assetsp
+    %host = load %hostp
+    call @std_bytes_destroy(%config)
+    call @std_bytes_destroy(%assets)
+    call @std_bytes_destroy(%host)
+    %raw:ptr<void> = cast %s
+    call @std_core_release(%raw)
+    return
+}
+
+fn @poll_items(%s:ptr<Server>) -> void {
+^entry:
+    %cp = field %s, clients
+    %pp = field %s, polls
+    %np = field %s, count
+    %clients = load %cp
+    %polls = load %pp
+    %count = load %np
+    jump ^loop(%clients, %polls, %count, 0, false)
+^loop(%clients:ptr<Connection>, %polls:ptr<StdPoll>, %count:i64, %i:i64, %vacant:bool):
+    %done = eq %i, %count
+    branch %done, ^listener(%polls, %vacant), ^item(%clients, %polls, %count, %i, %vacant)
+^item(%clients:ptr<Connection>, %polls:ptr<StdPoll>, %count:i64, %i:i64, %vacant:bool):
+    %c = offset %clients, %i
+    %index = add %i, 1
+    %p = offset %polls, %index
+    %sp = field %c, socket
+    %stp = field %c, state
+    %socket = load %sp
+    %state = load %stp
+    %ps = field %p, socket
+    %pe = field %p, events
+    store %ps, %socket
+    %writing = eq %state, 2
+    branch %writing, ^events(%clients, %polls, %count, %i, %vacant, %pe, 2, %state), ^events(%clients, %polls, %count, %i, %vacant, %pe, 1, %state)
+^events(%clients:ptr<Connection>, %polls:ptr<StdPoll>, %count:i64, %i:i64, %vacant:bool, %pe:ptr<i32>, %event:i32, %state:i32):
+    store %pe, %event
+    %empty = eq %state, 0
+    %next = add %i, 1
+    branch %empty, ^loop(%clients, %polls, %count, %next, true), ^loop(%clients, %polls, %count, %next, %vacant)
+^listener(%polls:ptr<StdPoll>, %vacant:bool):
+    %ps = field %polls, socket
+    %pe = field %polls, events
+    store %pe, 1
+    branch %vacant, ^enabled(%ps), ^disabled(%ps)
+^enabled(%ps:ptr<ptr<StdSocket>>):
+    %lp = field %s, listener
+    %listener = load %lp
+    store %ps, %listener
+    return
+^disabled(%ps:ptr<ptr<StdSocket>>):
+    store %ps, null
+    return
+}
+fn @accept_clients(%s:ptr<Server>, %now:u64) -> void {
+^entry:
+    %slot = stack ptr<StdSocket>, 1
+    %cp = field %s, clients
+    %np = field %s, count
+    %lp = field %s, listener
+    %clients = load %cp
+    %count = load %np
+    %listener = load %lp
+    jump ^loop(%slot, %clients, %count, %listener, 0)
+^loop(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64):
+    %done = eq %i, %count
+    branch %done, ^done(), ^client(%slot, %clients, %count, %listener, %i)
+^client(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64):
+    %c = offset %clients, %i
+    %sp = field %c, state
+    %state = load %sp
+    %empty = eq %state, 0
+    branch %empty, ^accept(%slot, %clients, %count, %listener, %i, %c), ^next(%slot, %clients, %count, %listener, %i)
+^accept(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64, %c:ptr<Connection>):
+    %status = call @std_net_accept(%listener, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^accepted(%slot, %clients, %count, %listener, %i, %c), ^done()
+^accepted(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64, %c:ptr<Connection>):
+    %socket = load %slot
+    %empty = eq %socket, null
+    branch %empty, ^done(), ^parser(%slot, %clients, %count, %listener, %i, %c, %socket)
+^parser(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64, %c:ptr<Connection>, %socket:ptr<StdSocket>):
+    %sp = field %c, socket
+    store %sp, %socket
+    %hp = field %s, header_limit
+    %bp = field %s, body_limit
+    %hcp = field %s, header_count
+    %h = load %hp
+    %b = load %bp
+    %hc = load %hcp
+    %pp = field %c, parser
+    %status = call @std_http_new(%h, %b, %hc, %pp)
+    %ok = eq %status, 0
+    branch %ok, ^ready(%slot, %clients, %count, %listener, %i, %c), ^failed(%slot, %clients, %count, %listener, %i, %c)
+^ready(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64, %c:ptr<Connection>):
+    %sp = field %c, state
+    %dp = field %c, deadline
+    %tp = field %s, timeout
+    %timeout = load %tp
+    %deadline = add %now, %timeout
+    store %dp, %deadline
+    store %sp, 1
+    jump ^next(%slot, %clients, %count, %listener, %i)
+^failed(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64, %c:ptr<Connection>):
+    call @close_client(%c)
+    jump ^next(%slot, %clients, %count, %listener, %i)
+^next(%slot:ptr<ptr<StdSocket>>, %clients:ptr<Connection>, %count:i64, %listener:ptr<StdSocket>, %i:i64):
+    %next = add %i, 1
+    jump ^loop(%slot, %clients, %count, %listener, %next)
+^done:
+    return
+}
+fn @writing(%s:ptr<Server>, %c:ptr<Connection>, %now:u64, %status:i32) -> void {
+^entry:
+    %ok = eq %status, 0
+    branch %ok, ^state(), ^close()
+^state:
+    %sp = field %c, state
+    %dp = field %c, deadline
+    %tp = field %s, timeout
+    %timeout = load %tp
+    %deadline = add %now, %timeout
+    store %sp, 2
+    store %dp, %deadline
+    return
+^close:
+    call @close_client(%c)
+    return
+}
+fn @read_client(%s:ptr<Server>, %c:ptr<Connection>, %now:u64) -> void {
+^entry:
+    %count = stack u64, 1
+    %ready = stack bool, 1
+    %sp = field %c, socket
+    %cp = field %s, chunk
+    %np = field %s, chunk_size
+    %socket = load %sp
+    %chunk = load %cp
+    %size = load %np
+    %status = call @std_net_receive(%socket, %chunk, %size, %count)
+    %ok = eq %status, 0
+    branch %ok, ^bytes(%count, %ready, %chunk), ^close()
+^bytes(%count:ptr<u64>, %ready:ptr<bool>, %chunk:ptr<u8>):
+    %n = load %count
+    %empty = eq %n, 0
+    branch %empty, ^done(), ^feed(%ready, %chunk, %n)
+^feed(%ready:ptr<bool>, %chunk:ptr<u8>, %n:u64):
+    %pp = field %c, parser
+    %parser = load %pp
+    %status = call @std_http_feed(%parser, %chunk, %n, %ready)
+    %ok = eq %status, 0
+    branch %ok, ^ready(%ready, %parser), ^parse_error(%parser)
+^ready(%ready:ptr<bool>, %parser:ptr<StdHttp>):
+    %yes = load %ready
+    branch %yes, ^route(%parser), ^done()
+^route(%parser:ptr<StdHttp>):
+    %rp = field %s, routes
+    %routes = load %rp
+    %out = field %c, response
+    %status = call @snake_route(%routes, %parser, %now, %out)
+    %ok = eq %status, 0
+    branch %ok, ^write(%status), ^http_error(503)
+^parse_error(%parser:ptr<StdHttp>):
+    %code = call @std_http_error(%parser)
+    %none = eq %code, 0
+    branch %none, ^http_error(503), ^http_error(%code)
+^http_error(%code:i32):
+    %out = field %c, response
+    %status = call @snake_error(%code, %out)
+    jump ^write(%status)
+^write(%status:i32):
+    call @writing(%s, %c, %now, %status)
+    return
+^close:
+    call @close_client(%c)
+    return
+^done:
+    return
+}
+fn @write_client(%s:ptr<Server>, %c:ptr<Connection>) -> void {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %count = stack u64, 1
+    %rp = field %c, response
+    %response = load %rp
+    call @std_bytes_view(%response, %data, %len)
+    %p = load %data
+    %n = load %len
+    %sentp = field %c, sent
+    %sent = load %sentp
+    %left = sub %n, %sent
+    %ip = field %s, chunk_size
+    %chunk = load %ip
+    %small = le %left, %chunk
+    branch %small, ^send(%p, %n, %sentp, %sent, %left, %count), ^send(%p, %n, %sentp, %sent, %chunk, %count)
+^send(%p:ptr<u8>, %n:u64, %sentp:ptr<u64>, %sent:u64, %size:u64, %count:ptr<u64>):
+    %i:i64 = cast %sent
+    %start = offset %p, %i
+    %sp = field %c, socket
+    %socket = load %sp
+    %status = call @std_net_send(%socket, %start, %size, %count)
+    %ok = eq %status, 0
+    branch %ok, ^sent(%n, %sentp, %sent, %count), ^close()
+^sent(%n:u64, %sentp:ptr<u64>, %sent:u64, %count:ptr<u64>):
+    %count_value = load %count
+    %total = add %sent, %count_value
+    store %sentp, %total
+    %done = eq %total, %n
+    branch %done, ^close(), ^done()
+^close:
+    call @close_client(%c)
+    return
+^done:
+    return
+}
+fn @service(%s:ptr<Server>, %c:ptr<Connection>, %ready:i32, %now:u64) -> void {
+^entry:
+    %sp = field %c, state
+    %state = load %sp
+    %empty = eq %state, 0
+    branch %empty, ^done(), ^deadline(%state)
+^deadline(%state:i32):
+    %dp = field %c, deadline
+    %deadline = load %dp
+    %expired = ge %now, %deadline
+    %reading = eq %state, 1
+    branch %expired, ^expired(%reading), ^event(%reading)
+^expired(%reading:bool):
+    branch %reading, ^timeout(), ^close()
+^timeout:
+    %rp = field %c, response
+    %status = call @snake_error(408, %rp)
+    call @writing(%s, %c, %now, %status)
+    return
+^event(%reading:bool):
+    %any = ne %ready, 0
+    branch %any, ^mode(%reading), ^done()
+^mode(%reading:bool):
+    branch %reading, ^read(), ^write()
+^read:
+    call @read_client(%s, %c, %now)
+    return
+^write:
+    call @write_client(%s, %c)
+    return
+^close:
+    call @close_client(%c)
+    return
+^done:
+    return
+}
+fn @serve(%s:ptr<Server>) -> i32 {
+^entry:
+    %time = stack u64, 1
+    jump ^loop(%time)
+^loop(%time:ptr<u64>):
+    %gp = field %s, guard
+    %guard = load %gp
+    %stop = call @std_process_shutdown_requested(%guard)
+    branch %stop, ^done(), ^poll(%time)
+^poll(%time:ptr<u64>):
+    call @poll_items(%s)
+    %pp = field %s, polls
+    %np = field %s, count
+    %mp = field %s, poll_ms
+    %polls = load %pp
+    %n = load %np
+    %count:u64 = cast %n
+    %total = add %count, 1
+    %ms = load %mp
+    %status = call @std_net_poll(%polls, %total, %ms)
+    %ok = eq %status, 0
+    branch %ok, ^clock(%time, %polls, %n), ^error(%status)
+^clock(%time:ptr<u64>, %polls:ptr<StdPoll>, %n:i64):
+    %status = call @std_time_monotonic(%time)
+    %ok = eq %status, 0
+    branch %ok, ^accept(%time, %polls, %n), ^error(%status)
+^accept(%time:ptr<u64>, %polls:ptr<StdPoll>, %n:i64):
+    %now = load %time
+    %ap = field %s, app
+    %app = load %ap
+    call @snake_app_expire(%app, %now)
+    call @accept_clients(%s, %now)
+    %cp = field %s, clients
+    %clients = load %cp
+    jump ^clients(%time, %polls, %n, %now, %clients, 0)
+^clients(%time:ptr<u64>, %polls:ptr<StdPoll>, %n:i64, %now:u64, %clients:ptr<Connection>, %i:i64):
+    %done = eq %i, %n
+    branch %done, ^loop(%time), ^client(%time, %polls, %n, %now, %clients, %i)
+^client(%time:ptr<u64>, %polls:ptr<StdPoll>, %n:i64, %now:u64, %clients:ptr<Connection>, %i:i64):
+    %c = offset %clients, %i
+    %index = add %i, 1
+    %p = offset %polls, %index
+    %rp = field %p, ready
+    %ready = load %rp
+    call @service(%s, %c, %ready, %now)
+    jump ^clients(%time, %polls, %n, %now, %clients, %index)
+^done:
+    return 0
+^error(%status:i32):
+    return %status
+}
+fn @announce(%s:ptr<Server>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %found = stack u64, 1
+    %status = call @std_bytes_new(%slot)
+    %ok = eq %status, 0
+    branch %ok, ^reserve(%slot, %data, %len, %found), ^error(%status)
+^reserve(%slot:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %found:ptr<u64>):
+    %buf = load %slot
+    %status = call @std_bytes_reserve(%buf, 256)
+    %ok = eq %status, 0
+    branch %ok, ^host(%buf, %data, %len, %found), ^cleanup(%buf, %status)
+^host(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %found:ptr<u64>):
+    %text = address @ready
+    %s1 = call @snake_put(%buf, %text)
+    %hp = field %s, host
+    %host = load %hp
+    call @std_bytes_view(%host, %data, %len)
+    %p = load %data
+    %n = load %len
+    %colon = address @colon
+    %status = call @std_bytes_find(%p, %n, %colon, 1, %found)
+    %v6 = eq %status, 0
+    branch %v6, ^bracket(%buf, %data, %len, %p, %n), ^append(%buf, %data, %len, %p, %n, false)
+^bracket(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %p:ptr<u8>, %n:u64):
+    %status = call @std_bytes_push(%buf, 91)
+    jump ^append(%buf, %data, %len, %p, %n, true)
+^append(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %p:ptr<u8>, %n:u64, %v6:bool):
+    %status = call @std_bytes_append(%buf, %p, %n)
+    branch %v6, ^bracket_end(%buf, %data, %len), ^port(%buf, %data, %len)
+^bracket_end(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %status = call @std_bytes_push(%buf, 93)
+    jump ^port(%buf, %data, %len)
+^port(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %s1 = call @std_bytes_push(%buf, 58)
+    %pp = field %s, port
+    %port = load %pp
+    %v:i64 = cast %port
+    %s2 = call @std_text_format_i64(%v, %buf)
+    %s3 = call @std_bytes_push(%buf, 10)
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %status = call @std_io_stdout(%p, %n)
+    jump ^cleanup(%buf, %status)
+^cleanup(%buf:ptr<StdBuf>, %status:i32):
+    call @std_bytes_destroy(%buf)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @report(%status:i32) -> void {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %message = address @failure
+    %n = call @snake_zlen(%message)
+    %s1 = call @std_io_stderr(%message, %n)
+    %s2 = call @std_bytes_new(%slot)
+    %ok = eq %s2, 0
+    branch %ok, ^number(%slot, %data, %len), ^done()
+^number(%slot:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %buf = load %slot
+    %v:i64 = cast %status
+    %s1 = call @std_text_format_i64(%v, %buf)
+    %s2 = call @std_bytes_push(%buf, 10)
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %s3 = call @std_io_stderr(%p, %n)
+    call @std_bytes_destroy(%buf)
+    return
+^done:
+    return
+}
+fn @main(%argc:i32, %argv:ptr<ptr<u8>>) -> i32 {
+^entry:
+    %slot = stack ptr<Server>, 1
+    %raw:ptr<ptr<void>> = cast %slot
+    %size = sizeof Server
+    %status = call @std_core_allocate(1, %size, %raw)
+    %ok = eq %status, 0
+    branch %ok, ^args(%slot), ^error(%status)
+^args(%slot:ptr<ptr<Server>>):
+    %s = load %slot
+    %pp = field %s, port
+    store %pp, -1
+    %status = call @arguments(%s, %argc, %argv)
+    %ok = eq %status, 0
+    branch %ok, ^initialize(%s), ^args_error(%s, %status)
+^args_error(%s:ptr<Server>, %status:i32):
+    %help = eq %status, -1
+    branch %help, ^cleanup(%s, 0), ^cleanup(%s, %status)
+^initialize(%s:ptr<Server>):
+    %status = call @initialize(%s)
+    %ok = eq %status, 0
+    branch %ok, ^announce(%s), ^cleanup(%s, %status)
+^announce(%s:ptr<Server>):
+    %status = call @announce(%s)
+    %ok = eq %status, 0
+    branch %ok, ^serve(%s), ^cleanup(%s, %status)
+^serve(%s:ptr<Server>):
+    %status = call @serve(%s)
+    jump ^cleanup(%s, %status)
+^cleanup(%s:ptr<Server>, %status:i32):
+    call @destroy(%s)
+    %ok = eq %status, 0
+    branch %ok, ^done(), ^error(%status)
+^done:
+    return 0
+^error(%status:i32):
+    call @report(%status)
+    return %status
+}

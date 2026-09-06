@@ -1,9 +1,10 @@
 # LM0 Application Report: Snake
 
-Building [Snake](../../examples/snake/README.md) exposed two concrete missing
-capabilities. Both are now implemented, documented, and covered by regression
-tests. All game decisions run in LM0; Python provides the native host and HTTP
-transport, and JavaScript renders the returned state and captures input.
+Building [Snake](../../examples/snake/README.md) exposed several concrete
+missing capabilities. They are now implemented, documented, and covered by
+native regression tests. The server, session manager, HTTP parser, and game
+decisions run in LM0; C is limited to operating-system adapters and JavaScript
+renders the returned state and captures input.
 
 The baseline for both reports is commit `f7f23b3`, LM0 0.1.0, Python 3.13.9,
 GCC 13.3.0, target `x86_64-linux-gnu`, Linux. Default compiler configuration was
@@ -57,7 +58,8 @@ the existing atomic artifact replacement behavior.
 Validation: exports, hidden internal symbols and mutable static data at `-O0`
 and `-O2`; resolved and unresolved imports; preservation of an old artifact on
 failure; a sanitized native executable linked to a sanitized LM0 shared library.
-Snake now uses this build mode through the existing Python compiler interface.
+Snake now builds as one native executable from four LM0 objects and the standard
+archive.
 
 ## Report: No Overlap-Safe Memory Copy
 
@@ -102,7 +104,7 @@ completed board.
 ## Remaining Constraints
 
 This application uses the existing x86-64 Linux target and a native host. It
-does not add WebAssembly or a browser-native compiler backend. The checked-in
-UI assets work offline while the local server is running. Native traps still
-terminate the host; shared-library support does not alter LM0's memory or trap
-semantics. These constraints are documented in the game guide and specification.
+does not add WebAssembly, TLS, DNS, or a browser-native compiler backend. The
+checked-in UI assets work offline while the local server is running. Native traps
+still terminate the host; the socket and HTTP libraries expose bounded error
+statuses rather than converting traps into exceptions.

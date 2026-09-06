@@ -35,6 +35,8 @@ Keep public interfaces and defaults in `stdlib/catalog.json`. Reuse the byte buf
 checked allocator/growth, and status interfaces across implementations. Algorithms
 belong in LM0 v2; platform adapters and new tooling use C or assembly, without Python.
 Generated interfaces live under `build/stdlib`; update the catalogue, not those files.
+Snake is a native LM0 application. Build it with `make snake` and run
+`build/snake/snake`; do not restore the removed Python host or ctypes bindings.
 
 # Issue Reporting
 
@@ -49,4 +51,5 @@ preserve a local report and state **Not submitted**, with its path and the reaso
 Run `make smoke` for every native compiler change.
 Run `make eval` for evaluator changes (requires the C `json-c` development package).
 Run `make test-stdlib` for catalogue, library, import, or installation changes.
+Run `make test-snake` for Snake, networking, HTTP, process, or native application changes.
 Run `python3 -m unittest discover -s tests -v` before committing compiler changes.

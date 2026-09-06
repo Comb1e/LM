@@ -15,6 +15,10 @@
     "StdMap": [["slots","ptr<StdSlot>"],["len","u64"],["cap","u64"],["tombs","u64"]],
     "StdRng": [["state","u64"]],
     "StdFile": [["fd","i32"]],
+    "StdSocket": [["fd","i32"]],
+    "StdPoll": [["socket","ptr<StdSocket>"],["events","i32"],["ready","i32"]],
+    "StdShutdown": [["storage","ptr<void>"]],
+    "StdHttp": [["buf","ptr<StdBuf>"],["state","i32"],["scan","u64"],["line","u64"],["head","u64"],["length","u64"],["method","i32"],["target","u64"],["target_len","u64"],["version","i32"],["headers","u64"],["host_seen","i32"],["length_seen","i32"],["error","i32"],["header_limit","u64"],["body_limit","u64"],["count_limit","u64"]],
     "StdJsonNode": [["kind","i32"],["text","ptr<StdBuf>"],["key","ptr<StdBuf>"],["child","ptr<StdJsonNode>"],["tail","ptr<StdJsonNode>"],["next","ptr<StdJsonNode>"],["allocated","ptr<StdJsonNode>"],["owner","ptr<StdJson>"],["parent","ptr<StdJsonNode>"]],
     "StdJson": [["head","ptr<StdJsonNode>"],["root","ptr<StdJsonNode>"],["count","u64"]]
   },
@@ -91,7 +95,8 @@
       ["seed","void",[["rng","ptr<StdRng>"],["seed","u64"]],"Initialize caller storage; zero maps to configured nonzero seed."],
       ["next","u64",[["rng","ptr<StdRng>"]],"Advance initialized generator with shifts 12,25,27 and multiplier 2685821657736338717."],
       ["bounded","i32",[["rng","ptr<StdRng>"],["bound","u64"],["out","ptr<u64>"]],"Unbiased result in [0,bound); zero bound returns invalid without advancing state."],
-      ["fill","void",[["rng","ptr<StdRng>"],["data","ptr<u8>"],["len","u64"]],"One generator draw per byte, taking low eight bits; empty span permitted."]
+      ["fill","void",[["rng","ptr<StdRng>"],["data","ptr<u8>"],["len","u64"]],"One generator draw per byte, taking low eight bits; empty span permitted."],
+      ["secure","i32",[["data","ptr<u8>"],["len","u64"]],"OS getrandom bytes, retry EINTR. On I/O failure data may be partially filled; never fall back to deterministic RNG."]
     ]},
     {"name":"std_io","depends":["std_bytes"],"summary":"Synchronous POSIX file and console I/O.","functions":[
       ["open","i32",[["path","ptr<u8>"],["len","u64"],["mode","i32"],["out","ptr<ptr<StdFile>>"]],"Owned file; length-delimited path rejects embedded NUL. Modes 0 read, 1 create/truncate, 2 create/append. Destroy with close."],
@@ -123,7 +128,40 @@
       ["set_root","i32",[["doc","ptr<StdJson>"],["node","ptr<StdJsonNode>"]],"Set detached node from same document as root. Previous root remains document-owned and becomes detached."],
       ["append","i32",[["array","ptr<StdJsonNode>"],["value","ptr<StdJsonNode>"]],"Attach detached same-document node to array; reject cycles and root attachment."],
       ["set","i32",[["object","ptr<StdJsonNode>"],["key","ptr<u8>"],["len","u64"],["value","ptr<StdJsonNode>"]],"Copy UTF-8 key and attach detached same-document node. Replace existing member; old value becomes detached, still document-owned. Reject cycles."],
-      ["stringify","i32",[["doc","ptr<StdJson>"],["depth","u64"],["limit","u64"],["out","ptr<ptr<StdBuf>>"]],"Serialize compact JSON into owned buffer, preserving number lexemes and insertion order. Depth 0 uses default. Enforce explicit output-byte limit."]
+      ["stringify","i32",[["doc","ptr<StdJson>"],["depth","u64"],["limit","u64"],["out","ptr<ptr<StdBuf>>"]],"Serialize compact JSON into owned buffer, preserving number lexemes and insertion order. Depth 0 uses default. Enforce explicit output-byte limit."],
+      ["stringify_node","i32",[["node","ptr<StdJsonNode>"],["depth","u64"],["limit","u64"],["out","ptr<ptr<StdBuf>>"]],"Serialize exactly this borrowed subtree into owned buffer, without mutating its document or including siblings/object-member key. Null returns invalid. Same limits and formatting as stringify."]
+    ]},
+    {"name":"std_net","depends":["std_core"],"summary":"Owned nonblocking TCP sockets and readiness polling; no DNS or TLS.","functions":[
+      ["listen","i32",[["host","ptr<u8>"],["len","u64"],["port","i32"],["backlog","i32"],["out","ptr<ptr<StdSocket>>"]],"Listen on IPv4/IPv6 literal or localhost (IPv4 loopback), port 0..65535. Owned socket, nonblocking and close-on-exec. IPv6 is v6-only."],
+      ["accept","i32",[["listener","ptr<StdSocket>"],["out","ptr<ptr<StdSocket>>"]],"Success returns owned nonblocking socket, or null when no client is ready. Output unchanged on failure."],
+      ["connect","i32",[["host","ptr<u8>"],["len","u64"],["port","i32"],["out","ptr<ptr<StdSocket>>"]],"Begin nonblocking connection to literal/localhost. Success returns owned socket; poll writable then call connected, including for immediately connected sockets."],
+      ["connected","i32",[["socket","ptr<StdSocket>"]],"After writable readiness, check SO_ERROR; returns success or I/O. Does not consume socket."],
+      ["port","i32",[["socket","ptr<StdSocket>"],["out","ptr<i32>"]],"Read locally bound TCP port."],
+      ["receive","i32",[["socket","ptr<StdSocket>"],["data","ptr<u8>"],["capacity","u64"],["count","ptr<u64>"]],"One nonblocking receive, retry EINTR. Success count zero means would-block (or zero capacity); EOF returns 8 with count zero. Other failures preserve count."],
+      ["send","i32",[["socket","ptr<StdSocket>"],["data","ptr<u8>"],["len","u64"],["count","ptr<u64>"]],"One nonblocking send with SIGPIPE suppressed; may send a prefix. Success count zero means would-block or empty span. Failures preserve count."],
+      ["poll","i32",[["items","ptr<StdPoll>"],["count","u64"],["timeout_ms","i32"]],"Caller-owned initialized array: socket may be null to ignore; events bits 1 readable, 2 writable. Replaces ready with bits 1 readable, 2 writable, 4 hangup/error. Nonnegative timeout; timeout or EINTR succeeds with ready zero. Other failures preserve ready fields."],
+      ["close","i32",[["socket","ptr<StdSocket>"]],"Consume owned socket even on close failure. Null succeeds; do not retry."]
+    ]},
+    {"name":"std_process","depends":["std_bytes"],"summary":"Native arguments, executable path and scoped shutdown signals.","functions":[
+      ["argument","i32",[["argc","i32"],["argv","ptr<ptr<u8>>"],["index","i32"],["data","ptr<ptr<u8>>"],["len","ptr<u64>"]],"Borrow argv[index] as bytes without its NUL; requires native main argc/argv. Checked index; bytes last for process lifetime unless caller mutates argv."],
+      ["executable","i32",[["out","ptr<ptr<StdBuf>>"]],"Owned executable path bytes from /proc/self/exe, no NUL."],
+      ["shutdown_begin","i32",[["out","ptr<ptr<StdShutdown>>"]],"Own process-wide SIGINT/SIGTERM handler scope. Only one live scope allowed; handlers only set sig_atomic_t flag. Must be used from a single-threaded host."],
+      ["shutdown_requested","bool",[["guard","ptr<StdShutdown>"]],"True after SIGINT or SIGTERM in the live scope."],
+      ["shutdown_end","void",[["guard","ptr<StdShutdown>"]],"Restore previous handlers and consume scope; null accepted."]
+    ]},
+    {"name":"std_http","depends":["std_text"],"summary":"Incremental bounded HTTP/1 request parser and close-delimited response construction in LM0.","functions":[
+      ["new","i32",[["header_limit","u64"],["body_limit","u64"],["header_count","u64"],["out","ptr<ptr<StdHttp>>"]],"Owned parser. Positive header byte/count limits; body may be zero. Checked combined limit <= INT64_MAX. Destroy with destroy."],
+      ["destroy","void",[["parser","ptr<StdHttp>"]],"Destroy parser and its owned request bytes; null accepted."],
+      ["reset","void",[["parser","ptr<StdHttp>"]],"Discard request/error, retain limits and allocated capacity; invalidates views."],
+      ["feed","i32",[["parser","ptr<StdHttp>"],["data","ptr<u8>"],["len","u64"],["ready","ptr<bool>"]],"Append fragment; success sets ready when entire request is available. No further feed after completion/error until reset. Parse/limit failure is sticky; error accessor gives HTTP code. Allocation failure permits retry without consuming fragment. Strict CRLF, origin-form target, HTTP/1.0 or 1.1, no transfer encoding, no duplicate Host/Content-Length, no Expect. Bytes beyond one request are ignored by consumers; no pipelining support. Views borrowed until next feed/reset/destroy."],
+      ["error","i32",[["parser","ptr<StdHttp>"]],"HTTP status for parser failure, zero otherwise; not a library status."],
+      ["method","i32",[["parser","ptr<StdHttp>"]],"Requires complete request; 1 GET, 2 POST, 3 other. Not a status."],
+      ["target","void",[["parser","ptr<StdHttp>"],["data","ptr<ptr<u8>>"],["len","ptr<u64>"]],"Requires complete request; borrow origin-form target including query string."],
+      ["body","void",[["parser","ptr<StdHttp>"],["data","ptr<ptr<u8>>"],["len","ptr<u64>"]],"Requires complete request; borrow exactly Content-Length bytes; missing length means zero."],
+      ["header","i32",[["parser","ptr<StdHttp>"],["name","ptr<u8>"],["len","u64"],["data","ptr<ptr<u8>>"],["size","ptr<u64>"]],"Requires complete request; case-insensitive name lookup, trim SP/HTAB around first matching value. Missing returns 4. Duplicate framing, Origin and Content-Type headers are rejected by parser."],
+      ["same_origin","bool",[["parser","ptr<StdHttp>"]],"Complete request for a plain HTTP server: absent Origin is accepted. Otherwise require http:// authority matching Host, case-insensitive host and numeric port (default 80). Reject null, userinfo, paths, whitespace, malformed ports and unbracketed IPv6. Equivalent IPv6 spellings are not normalized."],
+      ["json_content","bool",[["parser","ptr<StdHttp>"]],"Complete request Content-Type is application/json, case-insensitive, optionally followed by semicolon parameters. Missing or another media type is false."],
+      ["response","i32",[["code","i32"],["headers","ptr<u8>"],["header_len","u64"],["body","ptr<u8>"],["body_len","u64"],["limit","u64"],["out","ptr<ptr<StdBuf>>"]],"Owned HTTP/1.1 response with status, Content-Length and Connection: close. headers is a trusted CRLF-terminated header block supplied by application (no blank line, Content-Length, Transfer-Encoding or Connection); body may be binary. Explicit total byte limit. Caller must use fixed/validated header values, never raw request data."]
     ]}
   ]
 }

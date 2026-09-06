@@ -1,0 +1,421 @@
+module snake_support version 2
+use std_json
+use std_io
+use std_process
+
+data @keys = "width\u0000height\u0000initial_length\u0000points_per_food\u0000default_speed\u0000min_speed\u0000max_speed\u0000port\u0000max_sessions\u0000session_ttl_seconds\u0000max_body_bytes\u0000request_timeout_seconds\u0000max_connections\u0000max_header_bytes\u0000max_headers\u0000max_response_bytes\u0000max_asset_bytes\u0000io_chunk_bytes\u0000poll_interval_ms\u0000"
+data @colors = "background\u0000grid\u0000snake\u0000tail\u0000food\u0000eyes\u0000"
+data @game = "game\u0000"
+data @server = "server\u0000"
+data @visual = "visual\u0000"
+data @host = "host\u0000"
+data @config_start = "{\"game\":\u0000"
+data @config_visual = ",\"visual\":\u0000"
+data @config_end = "}\u0000"
+
+# Only used with application-owned NUL-terminated literals or native argv.
+export c fn @snake_zlen(%text:ptr<u8>) -> u64 {
+^entry:
+    jump ^loop(0)
+^loop(%i:i64):
+    %p = offset %text, %i
+    %b = load %p
+    %done = eq %b, 0
+    branch %done, ^done(%i), ^next(%i)
+^next(%i:i64):
+    %n = add %i, 1
+    jump ^loop(%n)
+^done(%i:i64):
+    %n:u64 = cast %i
+    return %n
+}
+export c fn @snake_word(%list:ptr<u8>, %index:i32) -> ptr<u8> {
+^entry:
+    jump ^loop(%list, 0)
+^loop(%p:ptr<u8>, %i:i32):
+    %done = eq %i, %index
+    branch %done, ^done(%p), ^next(%p, %i)
+^next(%p:ptr<u8>, %i:i32):
+    %len = call @snake_zlen(%p)
+    %step = add %len, 1
+    %n:i64 = cast %step
+    %pnext = offset %p, %n
+    %inext = add %i, 1
+    jump ^loop(%pnext, %inext)
+^done(%p:ptr<u8>):
+    return %p
+}
+export c fn @snake_eq(%data:ptr<u8>, %len:u64, %word:ptr<u8>) -> bool {
+^entry:
+    %n = call @snake_zlen(%word)
+    %c = call @std_bytes_compare(%data, %len, %word, %n)
+    %same = eq %c, 0
+    return %same
+}
+export c fn @snake_put(%buf:ptr<StdBuf>, %word:ptr<u8>) -> i32 {
+^entry:
+    %n = call @snake_zlen(%word)
+    %s = call @std_bytes_append(%buf, %word, %n)
+    return %s
+}
+export c fn @snake_append(%dest:ptr<StdBuf>, %source:ptr<StdBuf>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    call @std_bytes_view(%source, %data, %len)
+    %p = load %data
+    %n = load %len
+    %s = call @std_bytes_append(%dest, %p, %n)
+    return %s
+}
+export c fn @snake_member(%node:ptr<StdJsonNode>, %key:ptr<u8>) -> ptr<StdJsonNode> {
+^entry:
+    %slot = stack ptr<StdJsonNode>, 1
+    %null = eq %node, null
+    branch %null, ^missing(), ^get(%slot)
+^get(%slot:ptr<ptr<StdJsonNode>>):
+    %n = call @snake_zlen(%key)
+    %s = call @std_json_get(%node, %key, %n, %slot)
+    %ok = eq %s, 0
+    branch %ok, ^done(%slot), ^missing()
+^done(%slot:ptr<ptr<StdJsonNode>>):
+    %v = load %slot
+    return %v
+^missing:
+    return null
+}
+export c fn @snake_integer(%node:ptr<StdJsonNode>, %out:ptr<i64>) -> i32 {
+^entry:
+    %null = eq %node, null
+    branch %null, ^missing(), ^get()
+^get:
+    %s = call @std_json_i64(%node, %out)
+    return %s
+^missing:
+    return 4
+}
+export c fn @snake_string(%node:ptr<StdJsonNode>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> i32 {
+^entry:
+    %null = eq %node, null
+    branch %null, ^invalid(), ^kind()
+^kind:
+    %k = call @std_json_kind(%node)
+    %string = eq %k, 4
+    branch %string, ^get(), ^invalid()
+^get:
+    %s = call @std_json_text(%node, %data, %len)
+    return %s
+^invalid:
+    return 1
+}
+export c fn @snake_load(%path:ptr<u8>, %len:u64, %out:ptr<ptr<StdJson>>) -> i32 {
+^entry:
+    %buf = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %size = stack u64, 1
+    %s = call @std_io_read_file(%path, %len, 65536, %buf)
+    %ok = eq %s, 0
+    branch %ok, ^parse(%buf, %data, %size), ^error(%s)
+^parse(%buf:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %size:ptr<u64>):
+    %b = load %buf
+    call @std_bytes_view(%b, %data, %size)
+    %p = load %data
+    %n = load %size
+    %s = call @std_json_parse(%p, %n, 16, %out)
+    call @std_bytes_destroy(%b)
+    return %s
+^error(%s:i32):
+    return %s
+}
+
+export c fn @snake_path(%base:ptr<u8>, %len:u64, %name:ptr<u8>, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %s = call @std_bytes_new(%slot)
+    %ok = eq %s, 0
+    branch %ok, ^base(%slot), ^error(%s)
+^base(%slot:ptr<ptr<StdBuf>>):
+    %buf = load %slot
+    %s = call @std_bytes_append(%buf, %base, %len)
+    %ok = eq %s, 0
+    branch %ok, ^slash(%buf), ^cleanup(%buf, %s)
+^slash(%buf:ptr<StdBuf>):
+    %s = call @std_bytes_push(%buf, 47)
+    %ok = eq %s, 0
+    branch %ok, ^name(%buf), ^cleanup(%buf, %s)
+^name(%buf:ptr<StdBuf>):
+    %s = call @snake_put(%buf, %name)
+    %ok = eq %s, 0
+    branch %ok, ^done(%buf), ^cleanup(%buf, %s)
+^done(%buf:ptr<StdBuf>):
+    store %out, %buf
+    return 0
+^cleanup(%buf:ptr<StdBuf>, %s:i32):
+    call @std_bytes_destroy(%buf)
+    return %s
+^error(%s:i32):
+    return %s
+}
+export c fn @snake_default_path(%name:ptr<u8>, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %s = call @std_process_executable(%slot)
+    %ok = eq %s, 0
+    branch %ok, ^view(%slot, %data, %len), ^error(%s)
+^view(%slot:ptr<ptr<StdBuf>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %buf = load %slot
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %i:i64 = cast %n
+    jump ^scan(%buf, %p, %i)
+^scan(%buf:ptr<StdBuf>, %p:ptr<u8>, %i:i64):
+    %next = sub %i, 1
+    %bp = offset %p, %next
+    %b = load %bp
+    %slash = eq %b, 47
+    branch %slash, ^join(%buf, %p, %next), ^scan(%buf, %p, %next)
+^join(%buf:ptr<StdBuf>, %p:ptr<u8>, %i:i64):
+    %len:u64 = cast %i
+    %s = call @snake_path(%p, %len, %name, %out)
+    call @std_bytes_destroy(%buf)
+    return %s
+^error(%s:i32):
+    return %s
+}
+
+# Numeric configuration selectors follow the ordered keys above; -1 is invalid.
+export c fn @snake_setting(%doc:ptr<StdJson>, %index:i32) -> i64 {
+^entry:
+    %slot = stack i64, 1
+    %valid = ge %index, 0
+    branch %valid, ^range(%slot), ^invalid()
+^range(%slot:ptr<i64>):
+    %valid = lt %index, 19
+    branch %valid, ^section(%slot), ^invalid()
+^section(%slot:ptr<i64>):
+    %game = lt %index, 7
+    %g = address @game
+    %s = address @server
+    branch %game, ^get(%slot, %g), ^get(%slot, %s)
+^get(%slot:ptr<i64>, %section:ptr<u8>):
+    %root = call @std_json_root(%doc)
+    %object = call @snake_member(%root, %section)
+    %keys = address @keys
+    %key = call @snake_word(%keys, %index)
+    %node = call @snake_member(%object, %key)
+    %status = call @snake_integer(%node, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^done(%slot), ^invalid()
+^done(%slot:ptr<i64>):
+    %v = load %slot
+    return %v
+^invalid:
+    return -1
+}
+fn @bounds(%i:i32, %v:i64) -> bool {
+^entry:
+    %board = lt %i, 2
+    branch %board, ^range(8, 64), ^initial()
+^initial:
+    %yes = eq %i, 2
+    branch %yes, ^range(2, 32), ^points()
+^points:
+    %yes = eq %i, 3
+    branch %yes, ^range(1, 10000), ^speed()
+^speed:
+    %yes = lt %i, 7
+    branch %yes, ^range(1, 60), ^port()
+^port:
+    %yes = eq %i, 7
+    branch %yes, ^range(0, 65535), ^sessions()
+^sessions:
+    %yes = eq %i, 8
+    branch %yes, ^range(1, 4096), ^ttl()
+^ttl:
+    %yes = eq %i, 9
+    branch %yes, ^range(1, 604800), ^body()
+^body:
+    %yes = eq %i, 10
+    branch %yes, ^range(1, 65536), ^timeout()
+^timeout:
+    %yes = eq %i, 11
+    branch %yes, ^range(1, 300), ^connections()
+^connections:
+    %yes = eq %i, 12
+    branch %yes, ^range(1, 1024), ^headers()
+^headers:
+    %yes = eq %i, 13
+    branch %yes, ^range(256, 65536), ^header_count()
+^header_count:
+    %yes = eq %i, 14
+    branch %yes, ^range(1, 256), ^response()
+^response:
+    %yes = eq %i, 15
+    branch %yes, ^range(32768, 4194304), ^assets()
+^assets:
+    %yes = eq %i, 16
+    branch %yes, ^range(1, 16777216), ^chunk()
+^chunk:
+    %yes = eq %i, 17
+    branch %yes, ^range(256, 65536), ^range(1, 1000)
+^range(%lo:i64, %hi:i64):
+    %fits = ge %v, %lo
+    branch %fits, ^upper(%hi), ^bad()
+^upper(%hi:i64):
+    %fits = le %v, %hi
+    return %fits
+^bad:
+    return false
+}
+fn @color(%node:ptr<StdJsonNode>) -> bool {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %s = call @snake_string(%node, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^size(%data, %len), ^bad()
+^size(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %n = load %len
+    %fits = eq %n, 7
+    %p = load %data
+    branch %fits, ^hash(%p), ^bad()
+^hash(%p:ptr<u8>):
+    %b = load %p
+    %hash = eq %b, 35
+    branch %hash, ^loop(%p, 1), ^bad()
+^loop(%p:ptr<u8>, %i:i64):
+    %done = eq %i, 7
+    branch %done, ^good(), ^byte(%p, %i)
+^byte(%p:ptr<u8>, %i:i64):
+    %bp = offset %p, %i
+    %b = load %bp
+    %d = sub %b, 48
+    %digit = le %d, 9
+    %next = add %i, 1
+    branch %digit, ^loop(%p, %next), ^hex(%p, %next, %b)
+^hex(%p:ptr<u8>, %next:i64, %b:u8):
+    %lower = or %b, 32
+    %d = sub %lower, 97
+    %hex = le %d, 5
+    branch %hex, ^loop(%p, %next), ^bad()
+^good:
+    return true
+^bad:
+    return false
+}
+export c fn @snake_config_validate(%doc:ptr<StdJson>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    jump ^numbers(%data, %len, 0)
+^numbers(%data:ptr<ptr<u8>>, %len:ptr<u64>, %i:i32):
+    %done = eq %i, 19
+    branch %done, ^initial(%data, %len), ^number(%data, %len, %i)
+^number(%data:ptr<ptr<u8>>, %len:ptr<u64>, %i:i32):
+    %v = call @snake_setting(%doc, %i)
+    %valid = call @bounds(%i, %v)
+    %next = add %i, 1
+    branch %valid, ^numbers(%data, %len, %next), ^bad()
+^initial(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %width = call @snake_setting(%doc, 0)
+    %initial = call @snake_setting(%doc, 2)
+    %half = div %width, 2
+    %fits = le %initial, %half
+    branch %fits, ^speed(%data, %len), ^bad()
+^speed(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %default = call @snake_setting(%doc, 4)
+    %min = call @snake_setting(%doc, 5)
+    %max = call @snake_setting(%doc, 6)
+    %fits = ge %default, %min
+    branch %fits, ^speed_max(%data, %len, %default, %max), ^bad()
+^speed_max(%data:ptr<ptr<u8>>, %len:ptr<u64>, %default:i64, %max:i64):
+    %fits = le %default, %max
+    branch %fits, ^host(%data, %len), ^bad()
+^host(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %root = call @std_json_root(%doc)
+    %key = address @server
+    %server = call @snake_member(%root, %key)
+    %key2 = address @host
+    %host = call @snake_member(%server, %key2)
+    %s = call @snake_string(%host, %data, %len)
+    %ok = eq %s, 0
+    branch %ok, ^host_length(%len, %root), ^bad()
+^host_length(%len:ptr<u64>, %root:ptr<StdJsonNode>):
+    %n = load %len
+    %valid = gt %n, 0
+    branch %valid, ^visual(%root), ^bad()
+^visual(%root:ptr<StdJsonNode>):
+    %key = address @visual
+    %visual = call @snake_member(%root, %key)
+    jump ^colors(%visual, 0)
+^colors(%visual:ptr<StdJsonNode>, %i:i32):
+    %done = eq %i, 6
+    branch %done, ^good(), ^color(%visual, %i)
+^color(%visual:ptr<StdJsonNode>, %i:i32):
+    %keys = address @colors
+    %key = call @snake_word(%keys, %i)
+    %node = call @snake_member(%visual, %key)
+    %ok = call @color(%node)
+    %next = add %i, 1
+    branch %ok, ^colors(%visual, %next), ^bad()
+^good:
+    return 0
+^bad:
+    return 1
+}
+
+export c fn @snake_config_body(%doc:ptr<StdJson>, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %a = stack ptr<StdBuf>, 1
+    %b = stack ptr<StdBuf>, 1
+    %result = stack ptr<StdBuf>, 1
+    store %a, null
+    store %b, null
+    store %result, null
+    %root = call @std_json_root(%doc)
+    %gk = address @game
+    %vk = address @visual
+    %game = call @snake_member(%root, %gk)
+    %visual = call @snake_member(%root, %vk)
+    %s = call @std_json_stringify_node(%game, 16, 65536, %a)
+    %ok = eq %s, 0
+    branch %ok, ^visual(%a, %b, %result, %visual), ^cleanup(%a, %b, %result, %s)
+^visual(%a:ptr<ptr<StdBuf>>, %b:ptr<ptr<StdBuf>>, %result:ptr<ptr<StdBuf>>, %visual:ptr<StdJsonNode>):
+    %s = call @std_json_stringify_node(%visual, 16, 65536, %b)
+    %ok = eq %s, 0
+    branch %ok, ^new(%a, %b, %result), ^cleanup(%a, %b, %result, %s)
+^new(%a:ptr<ptr<StdBuf>>, %b:ptr<ptr<StdBuf>>, %result:ptr<ptr<StdBuf>>):
+    %s = call @std_bytes_new(%result)
+    %ok = eq %s, 0
+    branch %ok, ^reserve(%a, %b, %result), ^cleanup(%a, %b, %result, %s)
+^reserve(%a:ptr<ptr<StdBuf>>, %b:ptr<ptr<StdBuf>>, %result:ptr<ptr<StdBuf>>):
+    %buf = load %result
+    %s = call @std_bytes_reserve(%buf, 131100)
+    %ok = eq %s, 0
+    branch %ok, ^write(%a, %b, %result, %buf), ^cleanup(%a, %b, %result, %s)
+^write(%a:ptr<ptr<StdBuf>>, %b:ptr<ptr<StdBuf>>, %result:ptr<ptr<StdBuf>>, %buf:ptr<StdBuf>):
+    %g = load %a
+    %v = load %b
+    %start = address @config_start
+    %middle = address @config_visual
+    %end = address @config_end
+    %s1 = call @snake_put(%buf, %start)
+    %s2 = call @snake_append(%buf, %g)
+    %s3 = call @snake_put(%buf, %middle)
+    %s4 = call @snake_append(%buf, %v)
+    %s5 = call @snake_put(%buf, %end)
+    store %out, %buf
+    store %result, null
+    jump ^cleanup(%a, %b, %result, 0)
+^cleanup(%a:ptr<ptr<StdBuf>>, %b:ptr<ptr<StdBuf>>, %result:ptr<ptr<StdBuf>>, %s:i32):
+    %av = load %a
+    %bv = load %b
+    %rv = load %result
+    call @std_bytes_destroy(%av)
+    call @std_bytes_destroy(%bv)
+    call @std_bytes_destroy(%rv)
+    return %s
+}

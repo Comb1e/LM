@@ -1,6 +1,6 @@
 # LM0 Standard Library
 
-LM0 0.4 includes ten native modules and 86 public functions. Use the catalogue to
+LM0 0.5 includes thirteen native modules and 114 public functions. Use the catalogue to
 find an operation, obtain its exact signature and contract, then import its module:
 
 ```sh
@@ -28,6 +28,9 @@ typed parameters shown in the signature; they are not complete programs.
 | `std_random` | Explicit xorshift64* state, bounded draws and byte filling |
 | `std_io` | File and console I/O, bounded whole-file reading, complete file writing |
 | `std_time` | Monotonic/Unix nanoseconds, elapsed time, sleep |
+| `std_net` | Nonblocking TCP sockets, literal-address connect/listen, polling |
+| `std_process` | Native arguments, executable path, scoped shutdown signals |
+| `std_http` | Incremental bounded HTTP/1 parsing and response construction |
 
 ## Generation Contract
 
@@ -158,6 +161,14 @@ buffer capacity. EOF is status 8 with zero bytes; a zero-capacity read succeeds.
 Monotonic clocks measure durations; Unix time can move backwards. Sleep retries
 interruptions. libm wrappers preserve the platform's IEEE results without
 exposing errno as a second error channel.
+
+`std_net` is deliberately nonblocking: a successful zero-byte receive/send means
+would-block, while EOF and I/O errors are distinct statuses. `std_http` is an
+incremental state machine; feed fragments until its ready flag is true, then
+consume borrowed views before feeding again. It rejects ambiguous
+Content-Length, transfer encoding, malformed CRLF, duplicate framing, and
+unsupported expectations. `std_process` exposes native `argc`/`argv` and a
+single signal guard whose handler only records a flag.
 
 ## Build and Repair
 

@@ -566,7 +566,7 @@ unsupported_error:
  FAIL e_unsupported, m_unsupported
 .target_error:
  FAIL e_target, m_target
-STR version_text, "LM0 0.4.0 native x86_64-linux-gnu"
+STR version_text, "LM0 0.5.0 native x86_64-linux-gnu"
 STR help_text, "lm0 [--config FILE] check|emit-asm|build|run|inspect|replace|migrate SOURCE [OPTIONS]\nOutput: -o FILE; build: --kind exe|object|shared -O0 --link FILE --library NAME\nLibraries: library list; library describe MODULE [std_MODULE_FUNCTION...]\nLibrary installation: --stdlib-dir DIR; v2 source imports: use std_MODULE\nInspection: --function NAME [--block NAME] or --module; --view compact|full\nRepair: --function NAME [--block NAME] --replacement FILE -o FILE [--expect-revision SHA256]\nMigration: migrate SOURCE -o FILE; instruction guidance: describe OP...\nEmission: --entry; execution: --timeout SECONDS\nOnly -O0 is supported. emit-c, bench and --sanitize are unavailable."
 STR m_usage, "Invalid command arguments; use lm0 --help"
 STR m_unsupported, "Native compiler supports assembly emission and -O0 only; emit-c, bench and --sanitize are unavailable"

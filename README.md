@@ -40,7 +40,7 @@ sudo make install
 lm0 run examples/linked_list.lm0
 ```
 
-Version 0.4 supports `-O0`. Higher optimization levels and `--sanitize` are
+Version 0.5 supports `-O0`. Higher optimization levels and `--sanitize` are
 rejected with `E_UNSUPPORTED`; native optimization and sanitizer instrumentation
 remain future backend work.
 
@@ -78,10 +78,11 @@ Read the [language specification](docs/spec.md), [grammar](docs/grammar.ebnf),
 
 ## Standard Library
 
-Ten bundled modules provide bytes/buffers, UTF-8 text, i64 vectors, byte-key maps,
-JSON, checked arithmetic/libm, deterministic random numbers, file I/O, time, and
+Thirteen bundled modules provide bytes/buffers, UTF-8 text, i64 vectors, byte-key
+maps, JSON, checked arithmetic/libm, deterministic and secure random numbers,
+file I/O, time, nonblocking TCP, incremental HTTP, process signals/arguments, and
 shared allocation/status conventions. Algorithms are written in LM0 v2; C handles
-allocation and platform services. Add `use std_MODULE` to get exact signatures and
+platform services. Add `use std_MODULE` to get exact signatures and
 automatic linking, then retrieve only the contracts needed for the current task:
 
 ```sh
@@ -99,12 +100,12 @@ and [measurements and application report](docs/experience/libraries.md).
 
 ## Play Snake
 
-Snake is a complete application with its game rules and state machine written
-in LM0. Its existing demonstration host is still Python-based and is outside the
-native compiler migration in version 0.2:
+Snake is a complete application with its server, sessions, game rules, and state
+machine written in LM0:
 
 ```sh
-python3 -m examples.snake.server
+make snake
+build/snake/snake
 ```
 
 Open <http://127.0.0.1:4173>. Use `--port 4175` if that port is occupied. No npm

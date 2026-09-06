@@ -1185,8 +1185,14 @@ fn @write_primitive(%buf:ptr<StdBuf>, %limit:u64, %node:ptr<StdJsonNode>, %kind:
 
 export c fn @std_json_stringify(%doc:ptr<StdJson>, %depth:u64, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
 ^entry:
-    %slot = stack ptr<StdBuf>, 1
     %root = call @std_json_root(%doc)
+    %s = call @std_json_stringify_node(%root, %depth, %limit, %out)
+    return %s
+}
+export c fn @std_json_stringify_node(%boundary:ptr<StdJsonNode>, %depth:u64, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %root:ptr<StdJsonNode> = cast %boundary
     %empty = eq %root, null
     branch %empty, ^error(1), ^new(%slot, %root)
 ^new(%slot:ptr<ptr<StdBuf>>, %root:ptr<StdJsonNode>):
@@ -1203,7 +1209,7 @@ export c fn @std_json_stringify(%doc:ptr<StdJson>, %depth:u64, %limit:u64, %out:
 ^prefix(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
     %pp = field %node, parent
     %parent = load %pp
-    %root = eq %parent, null
+    %root = eq %node, %boundary
     branch %root, ^visit(%buf, %node, %d, %max), ^parent_kind(%buf, %node, %d, %max, %parent)
 ^parent_kind(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %parent:ptr<StdJsonNode>):
     %kind = call @std_json_kind(%parent)
@@ -1244,6 +1250,9 @@ export c fn @std_json_stringify(%doc:ptr<StdJson>, %depth:u64, %limit:u64, %out:
     %nextdepth = add %d, 1
     branch %empty, ^close(%buf, %node, %nextdepth, %max), ^prefix(%buf, %child, %nextdepth, %max)
 ^advance(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %done = eq %node, %boundary
+    branch %done, ^done(%buf), ^sibling(%buf, %node, %d, %max)
+^sibling(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
     %np = field %node, next
     %next = load %np
     %end = eq %next, null

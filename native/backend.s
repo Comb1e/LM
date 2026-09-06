@@ -969,8 +969,29 @@ FUNC emit_asm
  jz .entry_error
  cmp qword ptr [rax+FLAGS], 0
  jne .entry_error
- cmp qword ptr [rax+LIST], 0
+ mov rcx,[rax+LIST]
+ test rcx,rcx
+ jz .entry_result
+ cmp qword ptr [module_version],2
  jne .entry_error
+ mov rdx,[builtin+TY_I32*8]
+ cmp [rcx+TYPE],rdx
+ jne .entry_error
+ mov rcx,[rcx+NEXT]
+ test rcx,rcx
+ jz .entry_error
+ cmp qword ptr [rcx+NEXT],0
+ jne .entry_error
+ mov rdx,[rcx+TYPE]
+ cmp qword ptr [rdx+FLAGS],TY_PTR
+ jne .entry_error
+ mov rdx,[rdx+TYPE]
+ cmp qword ptr [rdx+FLAGS],TY_PTR
+ jne .entry_error
+ mov rdx,[rdx+TYPE]
+ cmp rdx,[builtin+TY_U8*8]
+ jne .entry_error
+.entry_result:
  mov rdx, [builtin+TY_I32*8]
  cmp [rax+TYPE], rdx
  jne .entry_error

@@ -38,7 +38,7 @@ static void tools_tests(void) {
     char *source=path("source.lm0"),*output=path("program"),*object=path("module.o"),*assembly=path("module.s"),*shared=path("module.so");
     write_text(source,source_text);
     char *list[]={compiler,"library","list",NULL};json_object *r=json_command(0,list);
-    assert(json_object_array_length(member(r,"modules",json_type_array))==10);json_object_put(r);
+    assert(json_object_array_length(member(r,"modules",json_type_array))==13);json_object_put(r);
     char *describe[]={compiler,"library","describe","std_math","std_math_add_i64",NULL};r=json_command(0,describe);
     assert(json_object_array_length(member(r,"functions",json_type_array))==1);assert(strlen(string_member(r,"policy")));json_object_put(r);
     char *unknown[]={compiler,"library","describe","std_nothing",NULL};error_code(json_command(2,unknown),"E_LIBRARY");

@@ -2,21 +2,23 @@
 
 A playable Snake game whose state machine, movement, collisions, growth,
 food placement, scoring, and victory condition are implemented in
-[`engine.lm0`](engine.lm0). The canvas UI includes keyboard, swipe, and touch
+[`engine_v2.lm0`](engine_v2.lm0). The canvas UI includes keyboard, swipe, and touch
 controls, classic/wrap modes, adjustable pace, colors, sound, fullscreen,
 and personal records saved in the browser.
 
 ## Run
 
-From the repository root, with Python 3.11+ and GCC on x86-64 Linux:
+From the repository root, with GNU make, GCC, binutils, and x86-64 Linux:
 
 ```sh
-python3 -m examples.snake.server
+make snake
+build/snake/snake
 ```
 
-Open <http://127.0.0.1:4173>. The server compiles the LM0 engine to a temporary
-shared library at startup and serves all assets locally. No third-party Python
-packages, Node installation, internet connection, or asset build is required.
+Open <http://127.0.0.1:4173>. The server and gameplay engine are native LM0
+executables; no Python runtime or third-party server package is needed at
+startup. Use `--port 0` to select an ephemeral port, or pass `--config`,
+`--assets`, and `--host` to override bundled files and binding.
 Stop the foreground server with Ctrl+C.
 
 Use `--port 4175` when the default port is occupied. For a phone on the same LAN,
@@ -44,7 +46,7 @@ with an uncertain result are not replayed. An expired session starts a fresh gam
 
 ## Configuration
 
-Edit [`config.toml`](config.toml), or pass `--config PATH`, then restart the
+Edit [`config.json`](config.json), or pass `--config PATH`, then restart the
 server. It controls board dimensions, starting length, food points, pace limits,
 server limits, and board colors. Board dimensions are 8 through 64 cells per
 axis; starting length must be between 2 and half the width. Sessions are isolated,
@@ -54,15 +56,15 @@ Scores and completed run history are local to each browser, not a shared leaderb
 ## Architecture
 
 ```text
-Keyboard / touch -> serialized HTTP commands -> Python ctypes -> native LM0
+Keyboard / touch -> serialized HTTP commands -> native LM0
 Canvas rendering <- JSON snapshot             <- opaque game-state accessors
 ```
 
-`native.py` compiles the library with `lm0.tooling.build(kind="shared")`, binds
-explicit ABI types, and owns each native allocation. `server.py` serializes
-access to per-session handles. It handles HTTP, settings, and lifetime limits;
-the game rules live in LM0. The browser sets tick cadence and interpolates
-received cell positions. It does not decide collisions, food, or scores.
+`server.lm0` is compiled ahead of time into `build/snake/snake`. The LM0
+standard libraries provide nonblocking sockets, incremental HTTP parsing, JSON
+configuration, secure session entropy, monotonic deadlines, and signal cleanup.
+The browser sets tick cadence and interpolates received cell positions. It does
+not decide collisions, food, or scores.
 
 | Export | Contract |
 | --- | --- |
@@ -87,13 +89,12 @@ native allocation and trap semantics are those of the LM0 specification.
 From the repository root:
 
 ```sh
-python3 -m unittest discover -s tests -v
+make test-snake
 ```
 
-Native tests exercise `-O0` and `-O2`, randomized movement against an independent
-oracle, both collision types, tail-cell entry, deterministic seeds, growth,
-complete boards, invalid inputs, session isolation, and HTTP validation. Full
-games run to victory under AddressSanitizer and UndefinedBehaviorSanitizer.
+Native tests exercise movement against an independent oracle, both collision
+types, tail-cell entry, deterministic seeds, growth, complete boards, invalid
+inputs, HTTP framing, nonblocking sockets, entropy, deadlines, and shutdown.
 
 For browser development, from `examples/snake`:
 

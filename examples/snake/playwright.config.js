@@ -24,7 +24,7 @@ export default defineConfig({
     { name: "tablet", use: { viewport: { width: 820, height: 1180 } } },
   ],
   webServer: {
-    command: "python3 -m examples.snake.server --port 4174",
+    command: "make snake && build/snake/snake --port 4174",
     cwd: root,
     url: "http://127.0.0.1:4174/api/config",
     reuseExistingServer: false,
