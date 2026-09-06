@@ -1,0 +1,62 @@
+[
+  {
+    "id": "syntax_colon",
+    "task": "Missing block delimiter",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data\n        total += x\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data\n        total += x\n    return total\n"
+  },
+  {
+    "id": "unknown_name",
+    "task": "Unavailable variable",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        total += missing\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        total += missing\n    return total\n"
+  },
+  {
+    "id": "wrong_initial",
+    "task": "Incorrect identity",
+    "python": "def solve(data, key):\n    total = 1\n    for x in data:\n        total += x\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 1\n    for x in data:\n        total += x\n    return total\n"
+  },
+  {
+    "id": "wrong_operator",
+    "task": "Subtracts instead of adding",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        total -= x\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        total -= x\n    return total\n"
+  },
+  {
+    "id": "early_return",
+    "task": "Returns after the first item",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        total += x\n        return total\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        total += x\n        return total\n    return total\n"
+  },
+  {
+    "id": "missing_return",
+    "task": "Missing function result",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        total += x\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        total += x\n"
+  },
+  {
+    "id": "wrong_condition",
+    "task": "Skips negative elements",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        if x > 0:\n            total += x\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        if x > 0:\n            total += x\n    return total\n"
+  },
+  {
+    "id": "zero_division",
+    "task": "Invalid arithmetic",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        total += x // 0\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        total += x // 0\n    return total\n"
+  },
+  {
+    "id": "uninitialized",
+    "task": "Reads an uninitialized local",
+    "python": "def solve(data, key):\n    for x in data:\n        total += x\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    for x in data:\n        total += x\n    return total\n"
+  },
+  {
+    "id": "wrong_mutation",
+    "task": "Changes an input that should be preserved",
+    "python": "def solve(data, key):\n    total = 0\n    for x in data:\n        total += x\n    if len(data) > 0:\n        data[0] = 0\n    return total\n",
+    "v3": "module sum version 3\nexport c fn solve(data:slice<i64>, key:i64) -> i64:\n    total = 0\n    for x in data:\n        total += x\n    if len(data) > 0:\n        data[0] = 0\n    return total\n"
+  }
+]

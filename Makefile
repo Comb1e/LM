@@ -1,6 +1,7 @@
 CC = gcc
 EVAL_CFLAGS = -std=c11 -O2 -g -Wall -Wextra -Werror
 EVAL_COMMON = tools/eval_common.c tools/eval_common.h
+PYTHON_CONFIG ?= python3-config
 PREFIX ?= /usr/local
 ASFLAGS = -g -Wa,--fatal-warnings
 NATIVE = $(wildcard native/*.s native/*.inc native/*.asm)
@@ -100,6 +101,18 @@ smoke: build/lm0
 test: smoke test-stdlib test-v3
 	python3 -m unittest discover -s tests -v
 
+eval: build/lm0 build/lm0-eval build/lm0-eval-driver
+
+.PHONY: eval-python
+eval-python: eval build/lm0-eval-python
+
+.PHONY: test-comparison
+test-comparison: eval-python build/comparison-test
+	./build/comparison-test
+
+build/comparison-test: tests/comparison_test.c $(EVAL_COMMON)
+	$(CC) $(EVAL_CFLAGS) -Itools tests/comparison_test.c tools/eval_common.c -ljson-c -o $@
+
 .PHONY: test-v3
 test-v3: build/lm0 build/v3-test
 	./build/v3-test
@@ -107,9 +120,10 @@ test-v3: build/lm0 build/v3-test
 build/v3-test: tests/v3_test.c $(EVAL_COMMON)
 	$(CC) $(EVAL_CFLAGS) -Wno-misleading-indentation -Itools tests/v3_test.c tools/eval_common.c -ljson-c -o $@
 
-eval: build/lm0 build/lm0-eval build/lm0-eval-driver
+build/lm0-eval-python: tools/eval_python.c $(EVAL_COMMON)
+	$(CC) $(EVAL_CFLAGS) $(shell $(PYTHON_CONFIG) --includes) tools/eval_python.c tools/eval_common.c $(shell $(PYTHON_CONFIG) --embed --ldflags) -Wl,-rpath,$(shell $(PYTHON_CONFIG) --prefix)/lib -ljson-c -o $@
 
-build/lm0-eval: tools/eval.c tools/eval_oracles.c $(EVAL_COMMON) native/hash.s
+build/lm0-eval: tools/eval.c tools/eval_comparison.c tools/eval_applications.c tools/eval_oracles.c $(EVAL_COMMON) native/hash.s
 	mkdir -p build
 	$(CC) $(EVAL_CFLAGS) tools/eval.c tools/eval_oracles.c tools/eval_common.c native/hash.s -ljson-c -o $@
 
@@ -124,7 +138,7 @@ install: all
 	install -m 644 build/stdlib/liblm0std.a build/stdlib/catalog.id build/stdlib/std.h $(DESTDIR)$(PREFIX)/lib/lm0/
 
 clean:
-	rm -f build/v3.o build/v3-test
+	rm -f build/v3.o build/v3-test build/comparison-test build/lm0-eval-python
 	rm -f build/lm0 build/library-gen build/library-check build/library-measure build/library-tools-test build/stdlib-test
 	rm -f build/network-test build/snake-test build/snake/snake build/snake/*.o build/snake/config.json
 	rm -rf build/snake/static

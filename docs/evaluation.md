@@ -1,5 +1,8 @@
 # Offline V2 Evaluation
 
+The original default export remains supported. For Python/V3 comparisons use
+the schema-2 suite described below; V2 guidance now comes from `llm-v2.md`.
+
 The C evaluator compares exact artifacts and optionally executes saved LM0
 attempts. It makes no model requests and contains no tokenizer. Build from the
 repository root with `make eval`; GCC and the `json-c` development package are
@@ -120,3 +123,93 @@ feedback policy. Count guidance, tool responses, and all repairs. Without real
 token counts and model trials, the report supports source/context byte savings
 and migration correctness only. The process limits are not a security sandbox;
 execute trusted attempts or use external isolation, as with the legacy benchmark.
+
+## Python/V3 comparison (schema 2)
+
+```sh
+make eval-python test-v3 test-comparison
+build/lm0-eval export build/evaluation-v3 --suite python
+build/lm0-eval report build/evaluation-v3 -o build/v3-report.json
+```
+
+`make eval-python` adds an optional C driver using CPython development headers
+and its embedding library. Select the installation through `PYTHON_CONFIG`;
+override the executable with `--python-driver FILE`. No Python implementation
+of compiler, evaluator, or driver is added. Files in `evaluation/python` and
+`evaluation/python.json` are comparison programs. Ordinary builds do not need
+CPython. `make test-comparison` runs synthetic infrastructure/reference tests.
+
+The suite exports 20 idiomatic Python and V3 algorithm references, ten paired
+syntax/behavioral repair categories, and word-count, JSON-transform and statistics
+applications in Python/V2/V3. Algorithm cases omit the extreme data row and
+factorial/Fibonacci inputs whose required arithmetic overflows; retained inputs
+fit signed i64 intermediates. Popcount explicitly uses a 64-bit representation.
+The default suite remains the independent fixed-width wrapping regression.
+Do not merge those two numeric domains into a parity claim.
+
+Application inputs/expectations and admitted domains are in
+`evaluation/applications.json`. Each case gets a fresh temporary working
+directory; original checkout fixtures are not edited. Checks observe exit status,
+stdout and generated JSON files. Word-count line order is irrelevant. Statistics
+uses the same specified RNG in both languages, including Python's counted helper.
+References are public fixtures and establish case correctness, not general model
+accuracy. Binary-search complexity and other algorithm rules still require review.
+
+Use `version` values `v1`, `v2`, `v3`, or `python`. Add a nonnegative `trial` to
+separate independent trials; attempt numbering starts at zero within each
+task/version/trial. Algorithm interfaces are the original V2 exported pointer,
+length and key, V3 `solve(data:slice<i64>, key:i64) -> i64`, or Python
+`solve(data, key)`. Application task IDs start with `app_`. Paired V3/Python repair
+IDs are `repair_` plus an ID from `evaluation/comparison_repairs.json`.
+
+Schema-2 recordings retain the original `input`, `response`, `source` fields.
+For comparable model trials also record:
+
+```json
+{
+  "task": "sum", "version": "v3", "language": "lm0", "language_version": "3",
+  "trial": 0, "attempt": 0,
+  "model": {
+    "id": "actual-model", "version": "pinned-model-revision",
+    "decoding": {}, "feedback_policy": "recorded-shared-policy"
+  },
+  "input": "Full attempt input", "response": "Raw response",
+  "source": "Complete reconstructed candidate",
+  "requests": [
+    {"input": "Exact full input for this model request",
+     "response": "Exact raw response including tool requests",
+     "tools": []}
+  ]
+}
+```
+
+`requests` is the ordered sequence of model calls producing that attempt. Its
+input must include all guidance, repeated conversation context, tool results and
+feedback actually submitted on that call. Store tool exchanges in `tools` for
+audit; their text is already included in subsequent full inputs and is not charged
+again separately. If requests exist, counts use their `.request.N.input` and
+`.request.N.response` artifacts, not the convenience attempt copies or expanded
+source. Each complete recording is hashed as `.record`, binding metadata and
+tool exchanges as well as candidate text. Missing request counts leave totals
+unknown. Top-level `input`/`response` counts remain supported for legacy recordings.
+
+Optional per-request `provider_usage` contains nonnegative `input_tokens` and
+`output_tokens`. Reports keep these separate from externally tokenized text;
+never combine provider counters and tokenizer observations into one total.
+Record tokenizer special-token/chat-envelope settings in the existing count file.
+
+Reports include per-artifact source/context/guidance measurements and V3/Python
+or V3/V2 ratios wherever both counts exist. Workflow totals count requests through
+first functional success, plus every attempted request in unsuccessful trials.
+Language summaries report success rate and tokens spent per successful task.
+Ratios require complete counts, identical task/trial coverage, and matching
+model/decoding/feedback metadata. Configuration comparison uses the recorded
+model JSON representation; preserve the same canonical metadata object across
+languages. A parity claim additionally requires a ratio <=1 and V3 success rate
+at least Python's. A ratio or success rate is null when not measurable; zero
+successful tasks do not produce a finite cost-per-success value.
+
+The evaluator validates content binding, execution and consistency; it cannot
+authenticate model provenance or independently verify supplied token counts.
+Without authentic recordings, this release supplies reference correctness and
+artifact bytes only. Total task token savings and Python parity remain pending.

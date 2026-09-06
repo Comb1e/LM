@@ -14,6 +14,7 @@ char *format(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 char *read_text(const char *path);
 void write_text(const char *path, const char *text);
 json_object *parse_json(const char *text);
+json_object *try_parse_json(const char *text);
 json_object *read_json(const char *path);
 void write_json(const char *path, json_object *value);
 json_object *member(json_object *object, const char *key, enum json_type type);
@@ -23,6 +24,7 @@ void set_string(json_object *object, const char *key, const char *value);
 void set_integer(json_object *object, const char *key, int64_t value);
 void set_bool(json_object *object, const char *key, int value);
 Process process(char *const argv[], unsigned timeout);
+Process process_in(char *const argv[], unsigned timeout, const char *directory);
 void process_free(Process *result);
 json_object *evaluation_cases(json_object *tasks);
 #endif

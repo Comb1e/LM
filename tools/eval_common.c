@@ -64,17 +64,23 @@ void write_text(const char *path, const char *text) {
     free(temporary);
 }
 
-json_object *parse_json(const char *text) {
+json_object *try_parse_json(const char *text) {
     json_tokener *parser = json_tokener_new();
     json_tokener_set_flags(parser, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
     size_t length = strlen(text);
-    if (length > INT_MAX) die("JSON input is too large");
+    if (length > INT_MAX) {json_tokener_free(parser);return NULL;}
     json_object *value = json_tokener_parse_ex(parser, text, (int)length);
-    if (json_tokener_get_error(parser) != json_tokener_success || !value) die("Invalid JSON");
+    if (json_tokener_get_error(parser) != json_tokener_success || !value) {json_tokener_free(parser);json_object_put(value);return NULL;}
     size_t end = json_tokener_get_parse_end(parser);
     while (end < length && (text[end] == ' ' || text[end] == '\n' || text[end] == '\r' || text[end] == '\t')) end++;
-    if (end != length) die("Trailing JSON input");
     json_tokener_free(parser);
+    if (end != length) {json_object_put(value);return NULL;}
+    return value;
+}
+
+json_object *parse_json(const char *text) {
+    json_object *value=try_parse_json(text);
+    if(!value)die("Invalid or trailing JSON input");
     return value;
 }
 
@@ -119,6 +125,10 @@ static int64_t milliseconds(void) {
 
 /* Drain both streams while bounding the process group and combined output. */
 Process process(char *const argv[], unsigned timeout) {
+    return process_in(argv,timeout,NULL);
+}
+
+Process process_in(char *const argv[], unsigned timeout,const char *directory) {
     int pipes[2][2];
     if (pipe2(pipes[0], O_CLOEXEC) || pipe2(pipes[1], O_CLOEXEC)) die("Pipe failed");
     pid_t pid = fork();
@@ -128,6 +138,7 @@ Process process(char *const argv[], unsigned timeout) {
         dup2(pipes[0][1], STDOUT_FILENO);
         dup2(pipes[1][1], STDERR_FILENO);
         for (int i = 0; i < 2; i++) { close(pipes[i][0]); close(pipes[i][1]); }
+        if(directory && chdir(directory)) _exit(126);
         execvp(argv[0], argv);
         _exit(127);
     }

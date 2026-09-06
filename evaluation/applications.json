@@ -1,0 +1,19 @@
+[
+  {"id":"app_word_count","name":"word_count","task":"Read examples/stdlib/words.txt as UTF-8 bytes, lowercase ASCII and split at bytes 0 through 32; print word=count lines in any order. Return 7 on a missing file.","cases":[
+    {"words":"LM0 libraries make LM0 programs smaller.\nLibraries make programs reusable.\n","stdout":"libraries=2\nlm0=2\nmake=2\nprograms=2\nreusable.=1\nsmaller.=1\n","exit_code":0},
+    {"words":" A\tA\nB b\n","stdout":"a=2\nb=2\n","exit_code":0},
+    {"words":"","stdout":"","exit_code":0},
+    {"stdout":"","exit_code":7}
+  ]},
+  {"id":"app_json_transform","name":"json_transform","task":"Read examples/stdlib/input.json, increment integer count with signed-i64 overflow checking, preserve the remaining JSON value, and write compact JSON to stdout and build/stdlib-transformed.json. Inputs have unique keys and ordinary integer numbers. Return library statuses for missing files, malformed input, missing count and overflow.","cases":[
+    {"json":"{\"name\":\"LM0\",\"count\":41,\"libraries\":[\"bytes\",\"text\",\"json\"]}","stdout":"{\"name\":\"LM0\",\"count\":42,\"libraries\":[\"bytes\",\"text\",\"json\"]}","exit_code":0},
+    {"json":"{\"count\":-1}","stdout":"{\"count\":0}","exit_code":0},
+    {"json":"{\"count\":9223372036854775807}","stdout":"","exit_code":2},
+    {"json":"{}","stdout":"","exit_code":4},
+    {"json":"{","stdout":"","exit_code":6},
+    {"stdout":"","exit_code":7}
+  ]},
+  {"id":"app_statistics","name":"statistics","task":"Generate 100 integers in [0,1000) using xorshift64* seed 1 and the documented std_random_bounded rejection rule; print their sum and upper median. Preserve the RNG algorithm in Python; do not substitute Python's default RNG.","cases":[
+    {"stdout":"sum=47221\nupper_median=423\n","exit_code":0}
+  ]}
+]

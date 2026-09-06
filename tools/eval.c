@@ -11,6 +11,23 @@
 
 static const char *compiler, *driver, *directory;
 static json_object *artifacts, *tasks, *cases;
+static int comparison;
+static const char *python_driver = "build/lm0-eval-python";
+static void export_comparison(void);
+static void report_comparison(json_object *, json_object *, json_object *, json_object *);
+static void ordinary_cases(void);
+static void export_requests(json_object *,const char *,const char *);
+static int64_t request_tokens(json_object *,json_object *,const char *,const char *);
+static int application_task(const char *);
+static Process run_application(const char *,const char *,int,const char *);
+static int64_t trial_number(json_object *row) {
+    json_object *value;
+    return json_object_object_get_ex(row, "trial", &value) ? integer_member(row, "trial") : 0;
+}
+static const char *group_base(json_object *row) {
+    return comparison ? format("%s.%s.%lld", string_member(row, "task"), string_member(row, "version"), (long long)trial_number(row))
+                      : format("%s.%s", string_member(row, "task"), string_member(row, "version"));
+}
 
 static Process native_call(const char *command, const char *source, ...) {
     char *argv[32] = {(char *)compiler, (char *)command, (char *)source};
@@ -102,6 +119,10 @@ static void export_prompts(void) {
                 "All data and results are i64. n is the element count. Arithmetic wraps. Preserve input unless mutation is requested. "
                 "No main, imports, I/O, or global state. Return complete source.\nPublic example: %s\n",
                 version, json_object_get_string(description), json_object_to_json_string_ext(example, JSON_C_TO_STRING_PLAIN));
+            if(comparison && version==2) {
+                free(prompt);
+                prompt=format("LM0 version 2. %s\nexport c fn @solve(%%data:ptr<i64>, %%n:u64, %%key:i64) -> i64\nStandard library allowed. No main or I/O. Preserve input unless mutation is requested. All required intermediate arithmetic fits signed i64; popcount uses the 64-bit representation. Return complete source.\nPublic example: %s\n",json_object_get_string(description),json_object_to_json_string_ext(example,JSON_C_TO_STRING_PLAIN));
+            }
             paired(format("task.%s.prompt", task), version == 1 ? "v1" : "v2", "generation_prompt", prompt);
             free(prompt);
         }
@@ -153,17 +174,17 @@ static const char *attempt_base(json_object *row) {
     const char *task = string_member(row, "task"), *version = string_member(row, "version");
     int64_t attempt = integer_member(row, "attempt");
     json_object *description;
-    if (!json_object_object_get_ex(tasks, task, &description)) {
+    if (!json_object_object_get_ex(tasks, task, &description) && !(comparison && application_task(task))) {
         if (strncmp(task, "repair_", 7)) die("Unknown attempt task");
-        json_object *repairs = read_json("evaluation/repairs.json");
+        json_object *repairs = read_json(comparison && (!strcmp(version,"python")||!strcmp(version,"v3")) ? "evaluation/comparison_repairs.json" : "evaluation/repairs.json");
         int found = 0;
         for (size_t i = 0; i < json_object_array_length(repairs); i++)
             found |= !strcmp(task+7, string_member(json_object_array_get_idx(repairs, i), "id"));
         json_object_put(repairs);
         if (!found) die("Unknown repair task");
     }
-    if ((strcmp(version, "v1") && strcmp(version, "v2")) || attempt < 0 || (uint64_t)attempt > max_repairs) die("Invalid attempt version or number");
-    return format("attempt.%s.%s.%lld", task, version, (long long)attempt);
+    if ((strcmp(version, "v1") && strcmp(version, "v2") && (!comparison || (strcmp(version, "v3") && strcmp(version, "python")))) || attempt < 0 || (uint64_t)attempt > max_repairs || trial_number(row) < 0) die("Invalid attempt version or number");
+    return format("attempt.%s.%lld", group_base(row), (long long)attempt);
 }
 
 static void validate_attempts(json_object *rows) {
@@ -175,11 +196,20 @@ static void validate_attempts(json_object *rows) {
         if (json_object_object_get_ex(seen, base, &previous)) die("Duplicate attempt");
         set_bool(seen, base, 1);
         string_member(row, "input"); string_member(row, "response"); string_member(row, "source");
+        json_object *model;
+        if (comparison && json_object_object_get_ex(row,"model",&model)) {
+            if (!*string_member(model,"id") || !*string_member(model,"version") || !*string_member(model,"feedback_policy")) die("Model identity, version and feedback policy are required");
+            member(model,"decoding",json_type_object);
+            string_member(row,"language_version");
+            const char *language=string_member(row,"language");
+            if (strcmp(language,!strcmp(string_member(row,"version"),"python")?"python":"lm0")) die("Language and variant disagree");
+            member(row,"requests",json_type_array);
+        }
     }
     for (size_t i = 0; i < json_object_array_length(rows); i++) {
         json_object *row = json_object_array_get_idx(rows, i), *previous;
         for (int64_t a = 0; a < integer_member(row, "attempt"); a++)
-            if (!json_object_object_get_ex(seen, format("attempt.%s.%s.%lld", string_member(row, "task"), string_member(row, "version"), (long long)a), &previous))
+            if (!json_object_object_get_ex(seen, format("attempt.%s.%lld", group_base(row), (long long)a), &previous))
                 die("Attempt sequence must start at zero without gaps");
     }
     json_object_put(seen);
@@ -194,6 +224,10 @@ static json_object *export_attempts(const char *path) {
         const char *fields[] = {"input", "response", "source"};
         for (size_t f = 0; f < 3; f++)
             artifact(format("%s.%s", base, fields[f]), base, version, format("attempt_%s", fields[f]), string_member(row, fields[f]));
+        if (comparison) {
+            artifact(format("%s.record", base), base, version, "attempt_record", json_object_to_json_string_ext(row, JSON_C_TO_STRING_PLAIN));
+            export_requests(row,base,version);
+        }
     }
     return rows;
 }
@@ -202,12 +236,13 @@ static void export_all(json_object *settings, const char *attempt_path) {
     if (mkdir(directory, 0755)) die("Export requires a new directory under an existing parent");
     artifacts = json_object_new_array();
     json_object *manifest = json_object_new_object();
-    set_integer(manifest, "schema", 1);
+    set_integer(manifest, "schema", comparison ? 2 : 1);
     set_string(manifest, "compiler", require_native(native_call("--version", NULL, NULL)));
     export_corpus(read_json(string_member(settings, "corpus")));
     paired("guidance", "v1", "guidance", read_text("docs/llm-v1.md"));
     paired("guidance", "v2", "guidance", read_text("docs/llm-v2.md"));
     export_prompts();
+    if (comparison) export_comparison();
     json_object_object_add(manifest, "artifacts", artifacts);
     json_object_object_add(manifest, "attempts", export_attempts(attempt_path));
     json_object_object_add(manifest, "tasks", json_object_get(tasks));
@@ -298,9 +333,13 @@ static int valid_interface(json_object *module) {
     for (size_t i = 0; i < json_object_array_length(functions); i++) {
         json_object *fn = json_object_array_get_idx(functions, i);
         const char *name = string_member(fn, "name");
-        if (json_object_get_boolean(member(fn, "external", json_type_boolean)) || !strcmp(name, "main")) return 0;
+        if ((json_object_get_boolean(member(fn, "external", json_type_boolean)) && !(comparison && !strncmp(name,"std_",4))) || !strcmp(name, "main")) return 0;
         if (strcmp(name, "solve")) continue;
         json_object *params = member(fn, "params", json_type_array);
+        if (integer_member(module, "version") == 3 && json_object_array_length(params) == 2 &&
+            !strcmp(string_member(fn,"returns"),"i64") && json_object_get_boolean(member(fn,"exported",json_type_boolean)) &&
+            !strcmp(string_member(json_object_array_get_idx(params,0),"type"),"slice<i64>") &&
+            !strcmp(string_member(json_object_array_get_idx(params,1),"type"),"i64")) {found++;continue;}
         if (strcmp(string_member(fn, "returns"), "i64") || json_object_array_length(params) != 3 ||
             !json_object_get_boolean(member(fn, "exported", json_type_boolean))) return 0;
         for (size_t p = 0; p < 3; p++) if (strcmp(string_member(json_object_array_get_idx(params, p), "type"), types[p])) return 0;
@@ -328,35 +367,74 @@ static json_object *grade_attempts(json_object *rows, json_object *index, json_o
             if (f == 2) source_record = record;
         }
         char *source = artifact_path(source_record);
-        Process checked = native_call("check", source, NULL);
-        if (checked.timed_out || checked.limited || (checked.code != 0 && checked.code != 2)) die("Compiler failed while grading");
+        int is_python = !strcmp(version, "python");
+        int is_application = comparison && application_task(task);
+        char *pycheck[] = {(char *)python_driver, "check", source, "-", "-", NULL};
+        Process checked = is_python ? process(pycheck, process_timeout) : native_call("check", source, NULL);
+        if (checked.timed_out || checked.limited || (checked.code != 0 && checked.code != 2)) die(format("Compiler failed while grading %s (%d): %s%s",base,checked.code,checked.out,checked.err));
         json_object *validation = parse_json(checked.out), *result = json_object_new_object();
         set_string(result, "task", task); set_string(result, "version", version);
+        if (comparison) {
+            set_integer(result, "trial", trial_number(row));
+            json_object *record = member(index, format("%s.record", base), json_type_object);
+            char *saved = read_text(artifact_path(record));
+            if (strcmp(saved, json_object_to_json_string_ext(row, JSON_C_TO_STRING_PLAIN))) die("Attempt metadata changed");
+            free(saved);
+            json_object *requests;
+            if(json_object_object_get_ex(row,"requests",&requests))for(size_t q=0;q<json_object_array_length(requests);q++) {
+                json_object *request=json_object_array_get_idx(requests,q);
+                const char *parts[]={"input","response"};
+                for(size_t p=0;p<2;p++) {
+                    json_object *part=member(index,format("%s.request.%zu.%s",base,q,parts[p]),json_type_object);
+                    char *text=read_text(artifact_path(part));
+                    if(strcmp(text,string_member(request,parts[p])))die("Request differs from its hashed artifact");
+                    free(text);
+                }
+            }
+            int64_t provider_in=0,provider_out=0;int provider_complete=1;
+            if(!json_object_object_get_ex(row,"requests",&requests))provider_complete=0;
+            else {
+                set_integer(result,"request_count",(int64_t)json_object_array_length(requests));
+                for(size_t q=0;q<json_object_array_length(requests);q++) {
+                    json_object *request=json_object_array_get_idx(requests,q),*usage;
+                    if(!json_object_object_get_ex(request,"provider_usage",&usage)){provider_complete=0;continue;}
+                    int64_t a=integer_member(usage,"input_tokens"),b=integer_member(usage,"output_tokens");
+                    if(a<0||b<0||provider_in>INT64_MAX-a||provider_out>INT64_MAX-b)die("Invalid provider usage total");
+                    provider_in+=a;provider_out+=b;
+                }
+            }
+            nullable_count(result,"provider_input_tokens",provider_complete?provider_in:-1);
+            nullable_count(result,"provider_output_tokens",provider_complete?provider_out:-1);
+        }
         int64_t number = integer_member(row, "attempt");
         set_integer(result, "attempt", number);
         set_bool(result, "verified", checked.code == 0);
         json_object_object_add(result, "validation", validation);
         int correct = -1, eligible = 0;
-        if (!checked.code) {
+        if (!checked.code && !is_python) {
             char *inspection = require_native(native_call("inspect", source, "--module", NULL));
             json_object *module = parse_json(inspection);
             int64_t language_version = integer_member(module, "version");
-            eligible = valid_interface(module) && language_version == (!strcmp(version, "v1") ? 1 : 2);
+            eligible = (is_application || valid_interface(module)) && language_version == (!strcmp(version, "v1") ? 1 : !strcmp(version, "v3") ? 3 : 2);
             free(inspection); json_object_put(module);
         }
+        if (is_python) eligible = !checked.code;
         set_bool(result, "task_interface", eligible);
         if (execute) {
             correct = 0;
             if (eligible) {
-                Process built = native_call("build", source, "--kind", "shared", "-o", library, NULL);
+                Process built = is_python ? (Process){.out=strdup(""), .err=strdup("")} : is_application ? native_call("build",source,"-o",library,NULL) : native_call("build", source, "--kind", "shared", "-o", library, NULL);
                 if (!built.code && !built.timed_out && !built.limited) {
                     char *argv[] = {(char *)driver, library, format("%s/evaluation-cases.json", directory), (char *)(!strncmp(task, "repair_", 7) ? "sum" : task), NULL};
-                    Process run = process(argv, run_timeout);
+                    char *pyargv[] = {(char *)python_driver, "execute", source, argv[2], argv[3], NULL};
+                    Process run = is_application ? run_application(source,library,is_python,task) : process(is_python ? pyargv : argv, run_timeout);
                     correct = run.code == 0 && !run.timed_out && !run.limited;
                     if (correct) {
-                        json_object *observation = parse_json(run.out);
-                        correct = json_object_get_boolean(member(observation, "correct", json_type_boolean)) &&
-                            integer_member(observation, "cases") == (int64_t)json_object_array_length(member(cases, argv[3], json_type_array));
+                        json_object *observation = try_parse_json(run.out),*verdict=NULL,*observed_cases=NULL;
+                        correct = observation && json_object_object_get_ex(observation,"correct",&verdict) &&
+                            json_object_is_type(verdict,json_type_boolean) && json_object_get_boolean(verdict) &&
+                            json_object_object_get_ex(observation,"cases",&observed_cases) && json_object_is_type(observed_cases,json_type_int) &&
+                            json_object_get_int64(observed_cases) == (int64_t)json_object_array_length(member(cases, argv[3], json_type_array));
                         json_object_put(observation);
                     }
                     set_string(result, "execution_stdout", run.out);
@@ -372,14 +450,15 @@ static json_object *grade_attempts(json_object *rows, json_object *index, json_o
         }
         if (correct < 0) json_object_object_add(result, "correct", NULL);
         else set_bool(result, "correct", correct);
-        int64_t in = measured(counts, format("%s.input", base)), out = measured(counts, format("%s.response", base));
+        int64_t in = request_tokens(row,counts,base,"input"), out = request_tokens(row,counts,base,"response");
         nullable_count(result, "input_tokens", in); nullable_count(result, "output_tokens", out);
         json_object_array_add(results, result);
-        const char *group_id = format("%s.%s", task, version);
+        const char *group_id = group_base(row);
         json_object *group;
         if (!json_object_object_get_ex(groups, group_id, &group)) {
             group = json_object_new_object();
             set_string(group, "task", task); set_string(group, "version", version);
+            if (comparison) set_integer(group, "trial", trial_number(row));
             json_object_object_add(group, "attempts_to_success", NULL);
             json_object_object_add(groups, group_id, group);
         }
@@ -396,6 +475,7 @@ static json_object *grade_attempts(json_object *rows, json_object *index, json_o
         for (size_t i = 0; i < json_object_array_length(results); i++) {
             json_object *row = json_object_array_get_idx(results, i);
             if (strcmp(string_member(row, "task"), string_member(group, "task")) || strcmp(string_member(row, "version"), string_member(group, "version"))) continue;
+            if (comparison && trial_number(row) != trial_number(group)) continue;
             if (success && integer_member(row, "attempt") >= json_object_get_int64(success)) continue;
             attempts++;
             json_object *in = NULL, *out = NULL;
@@ -416,7 +496,9 @@ static json_object *grade_attempts(json_object *rows, json_object *index, json_o
 
 static void report_all(const char *counts_path, const char *output, int execute) {
     json_object *manifest = read_json(format("%s/manifest.json", directory));
-    if (integer_member(manifest, "schema") != 1) die("Unsupported manifest schema");
+    int64_t schema = integer_member(manifest, "schema");
+    if (schema != 1 && schema != 2) die("Unsupported manifest schema");
+    comparison = schema == 2;
     artifacts = member(manifest, "artifacts", json_type_array);
     char *case_text = read_text(format("%s/evaluation-cases.json", directory)), hash[65];
     if (!lm0_sha256(case_text, strlen(case_text), hash) || strcmp(hash, string_member(manifest, "cases_sha256"))) die("Evaluation cases changed");
@@ -447,6 +529,7 @@ static void report_all(const char *counts_path, const char *output, int execute)
     }
     json_object_object_add(report, "byte_totals_by_kind", sizes);
     json_object_object_add(report, "attempts", grade_attempts(member(manifest, "attempts", json_type_array), index, counts, execute, report));
+    if (comparison) report_comparison(manifest, index, counts, report);
     if (output) write_json(output, report);
     puts(json_object_to_json_string_ext(report, JSON_C_TO_STRING_PLAIN));
     json_object_put(counts); json_object_put(index); json_object_put(report); json_object_put(manifest);
@@ -467,6 +550,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(arg, "--driver")) driver = argv[i];
         else if (!strcmp(arg, "--attempts")) attempts = argv[i];
         else if (!strcmp(arg, "--counts")) counts = argv[i];
+        else if (!strcmp(arg, "--python-driver")) python_driver = argv[i];
+        else if (!strcmp(arg, "--suite") && !strcmp(argv[i], "python")) comparison = 1;
         else if (!strcmp(arg, "-o")) output = argv[i];
         else die("Unknown option");
     }
@@ -481,6 +566,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "export")) {
         if (counts || output || execute) die("Invalid export option");
         cases = evaluation_cases(tasks);
+        if (comparison) ordinary_cases();
         export_all(settings, attempts);
         json_object_put(cases);
     } else if (!strcmp(argv[1], "report")) {
@@ -490,3 +576,6 @@ int main(int argc, char **argv) {
     json_object_put(tasks); json_object_put(settings);
     return 0;
 }
+
+#include "eval_comparison.c"
+#include "eval_applications.c"

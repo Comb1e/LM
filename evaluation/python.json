@@ -1,0 +1,22 @@
+{
+  "sum": "def solve(data, key):\n    return sum(data)\n",
+  "product": "from math import prod\n\ndef solve(data, key):\n    return prod(data)\n",
+  "minimum": "def solve(data, key):\n    return min(data, default=0)\n",
+  "maximum": "def solve(data, key):\n    return max(data, default=0)\n",
+  "count_equal": "def solve(data, key):\n    return data.count(key)\n",
+  "index_of": "def solve(data, key):\n    return next((i for i, x in enumerate(data) if x == key), -1)\n",
+  "count_positive": "def solve(data, key):\n    return sum(x > 0 for x in data)\n",
+  "is_sorted": "def solve(data, key):\n    return int(all(a <= b for a, b in zip(data, data[1:])))\n",
+  "is_palindrome": "def solve(data, key):\n    return int(data == data[::-1])\n",
+  "sum_squares": "def solve(data, key):\n    return sum(x * x for x in data)\n",
+  "xor_reduce": "from functools import reduce\nfrom operator import xor\n\ndef solve(data, key):\n    return reduce(xor, data, 0)\n",
+  "gcd": "from math import gcd\n\ndef solve(data, key):\n    return gcd(*data[:2]) if len(data) >= 2 else 0\n",
+  "factorial": "from math import factorial\n\ndef solve(data, key):\n    return factorial(key)\n",
+  "fibonacci": "def solve(data, key):\n    a, b = 0, 1\n    for _ in range(key):\n        a, b = b, a + b\n    return a\n",
+  "popcount": "def solve(data, key):\n    return (key & ((1 << 64) - 1)).bit_count()\n",
+  "clamp_sum": "def solve(data, key):\n    return sum(max(-key, min(key, x)) for x in data)\n",
+  "binary_search": "from bisect import bisect_left\n\ndef solve(data, key):\n    i = bisect_left(data, key)\n    return i if i < len(data) and data[i] == key else -1\n",
+  "reverse": "def solve(data, key):\n    data.reverse()\n    return len(data)\n",
+  "sort": "def solve(data, key):\n    data.sort()\n    return len(data)\n",
+  "prefix_sum": "from itertools import accumulate\n\ndef solve(data, key):\n    data[:] = accumulate(data)\n    return data[-1] if data else 0\n"
+}
