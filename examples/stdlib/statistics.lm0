@@ -1,0 +1,129 @@
+module statistics version 2
+use std_vec
+use std_random
+use std_text
+use std_math
+use std_io
+
+fn @sample(%vec:ptr<StdVec>) -> i32 {
+^entry:
+    %rng = stack StdRng, 1
+    %value = stack u64, 1
+    call @std_random_seed(%rng, 1)
+    jump ^loop(%rng, %value, 0)
+^loop(%rng:ptr<StdRng>, %value:ptr<u64>, %i:u64):
+    %end = eq %i, 100
+    branch %end, ^done(), ^draw(%rng, %value, %i)
+^draw(%rng:ptr<StdRng>, %value:ptr<u64>, %i:u64):
+    %status = call @std_random_bounded(%rng, 1000, %value)
+    %ok = eq %status, 0
+    branch %ok, ^push(%rng, %value, %i), ^error(%status)
+^push(%rng:ptr<StdRng>, %value:ptr<u64>, %i:u64):
+    %v = load %value
+    %signed:i64 = cast %v
+    %status = call @std_vec_push(%vec, %signed)
+    %ok = eq %status, 0
+    %next = add %i, 1
+    branch %ok, ^loop(%rng, %value, %next), ^error(%status)
+^done:
+    return 0
+^error(%status:i32):
+    return %status
+}
+fn @line(%buf:ptr<StdBuf>, %name:ptr<u8>, %len:u64, %value:i64) -> i32 {
+^entry:
+    %status = call @std_bytes_append(%buf, %name, %len)
+    %ok = eq %status, 0
+    branch %ok, ^number(), ^error(%status)
+^number:
+    %status = call @std_text_format_i64(%value, %buf)
+    %ok = eq %status, 0
+    branch %ok, ^newline(), ^error(%status)
+^newline:
+    %status = call @std_bytes_push(%buf, 10)
+    return %status
+^error(%status:i32):
+    return %status
+}
+data @sum = "sum="
+data @median = "upper_median="
+fn @summarize(%vec:ptr<StdVec>, %buf:ptr<StdBuf>) -> i32 {
+^entry:
+    %value = stack i64, 1
+    %sum = stack i64, 1
+    %data = stack ptr<u8>, 1
+    %size = stack u64, 1
+    store %sum, 0
+    %n = call @std_vec_len(%vec)
+    jump ^loop(%value, %sum, %data, %size, %n, 0)
+^loop(%value:ptr<i64>, %sum:ptr<i64>, %data:ptr<ptr<u8>>, %size:ptr<u64>, %n:u64, %i:u64):
+    %end = eq %i, %n
+    branch %end, ^sum(%value, %sum, %data, %size, %n), ^get(%value, %sum, %data, %size, %n, %i)
+^get(%value:ptr<i64>, %sum:ptr<i64>, %data:ptr<ptr<u8>>, %size:ptr<u64>, %n:u64, %i:u64):
+    %status = call @std_vec_get(%vec, %i, %value)
+    %ok = eq %status, 0
+    branch %ok, ^add(%value, %sum, %data, %size, %n, %i), ^error(%status)
+^add(%value:ptr<i64>, %sum:ptr<i64>, %data:ptr<ptr<u8>>, %size:ptr<u64>, %n:u64, %i:u64):
+    %v = load %value
+    %s = load %sum
+    %status = call @std_math_add_i64(%s, %v, %sum)
+    %ok = eq %status, 0
+    %next = add %i, 1
+    branch %ok, ^loop(%value, %sum, %data, %size, %n, %next), ^error(%status)
+^sum(%value:ptr<i64>, %sum:ptr<i64>, %data:ptr<ptr<u8>>, %size:ptr<u64>, %n:u64):
+    %s = load %sum
+    %name = address @sum
+    %status = call @line(%buf, %name, 4, %s)
+    %ok = eq %status, 0
+    branch %ok, ^sort(%value, %data, %size, %n), ^error(%status)
+^sort(%value:ptr<i64>, %data:ptr<ptr<u8>>, %size:ptr<u64>, %n:u64):
+    call @std_vec_sort(%vec)
+    %mid = div %n, 2
+    %status = call @std_vec_get(%vec, %mid, %value)
+    %ok = eq %status, 0
+    branch %ok, ^median(%value, %data, %size), ^error(%status)
+^median(%value:ptr<i64>, %data:ptr<ptr<u8>>, %size:ptr<u64>):
+    %v = load %value
+    %name = address @median
+    %status = call @line(%buf, %name, 13, %v)
+    %ok = eq %status, 0
+    branch %ok, ^write(%data, %size), ^error(%status)
+^write(%data:ptr<ptr<u8>>, %size:ptr<u64>):
+    call @std_bytes_view(%buf, %data, %size)
+    %p = load %data
+    %n = load %size
+    %status = call @std_io_stdout(%p, %n)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @main() -> i32 {
+^entry:
+    %vec = stack ptr<StdVec>, 1
+    %buf = stack ptr<StdBuf>, 1
+    store %vec, null
+    store %buf, null
+    %status = call @std_vec_new(%vec)
+    %ok = eq %status, 0
+    branch %ok, ^buffer(%vec, %buf), ^cleanup(%vec, %buf, %status)
+^buffer(%vec:ptr<ptr<StdVec>>, %buf:ptr<ptr<StdBuf>>):
+    %status = call @std_bytes_new(%buf)
+    %ok = eq %status, 0
+    branch %ok, ^sample(%vec, %buf), ^cleanup(%vec, %buf, %status)
+^sample(%vec:ptr<ptr<StdVec>>, %buf:ptr<ptr<StdBuf>>):
+    %v = load %vec
+    %status = call @sample(%v)
+    %ok = eq %status, 0
+    branch %ok, ^summary(%vec, %buf), ^cleanup(%vec, %buf, %status)
+^summary(%vec:ptr<ptr<StdVec>>, %buf:ptr<ptr<StdBuf>>):
+    %v = load %vec
+    %b = load %buf
+    %status = call @summarize(%v, %b)
+    jump ^cleanup(%vec, %buf, %status)
+^cleanup(%vec:ptr<ptr<StdVec>>, %buf:ptr<ptr<StdBuf>>, %status:i32):
+    %v = load %vec
+    %b = load %buf
+    call @std_vec_destroy(%v)
+    call @std_bytes_destroy(%b)
+    return %status
+}

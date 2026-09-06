@@ -1,0 +1,229 @@
+module vec version 2
+use std_core
+
+export c fn @std_vec_new(%out:ptr<ptr<StdVec>>) -> i32 {
+^entry:
+    %raw:ptr<ptr<void>> = cast %out
+    %size = sizeof StdVec
+    %status = call @std_core_allocate(1, %size, %raw)
+    return %status
+}
+export c fn @std_vec_destroy(%vec:ptr<StdVec>) -> void {
+^entry:
+    %null = eq %vec, null
+    branch %null, ^done(), ^release()
+^release:
+    %p = field %vec, data
+    %data = load %p
+    %raw:ptr<void> = cast %data
+    call @std_core_release(%raw)
+    %handle:ptr<void> = cast %vec
+    call @std_core_release(%handle)
+    return
+^done:
+    return
+}
+export c fn @std_vec_len(%vec:ptr<StdVec>) -> u64 {
+^entry:
+    %p = field %vec, len
+    %n = load %p
+    return %n
+}
+export c fn @std_vec_reserve(%vec:ptr<StdVec>, %capacity:u64) -> i32 {
+^entry:
+    %p = field %vec, data
+    %raw:ptr<ptr<void>> = cast %p
+    %cap = field %vec, cap
+    %status = call @std_core_grow(%raw, %cap, %capacity, 8)
+    return %status
+}
+export c fn @std_vec_get(%vec:ptr<StdVec>, %index:u64, %out:ptr<i64>) -> i32 {
+^entry:
+    %n = call @std_vec_len(%vec)
+    %fits = lt %index, %n
+    branch %fits, ^read(), ^range()
+^read:
+    %dp = field %vec, data
+    %data = load %dp
+    %i:i64 = cast %index
+    %p = offset %data, %i
+    %value = load %p
+    store %out, %value
+    return 0
+^range:
+    return 2
+}
+export c fn @std_vec_set(%vec:ptr<StdVec>, %index:u64, %value:i64) -> i32 {
+^entry:
+    %n = call @std_vec_len(%vec)
+    %fits = lt %index, %n
+    branch %fits, ^write(), ^range()
+^write:
+    %dp = field %vec, data
+    %data = load %dp
+    %i:i64 = cast %index
+    %p = offset %data, %i
+    store %p, %value
+    return 0
+^range:
+    return 2
+}
+export c fn @std_vec_push(%vec:ptr<StdVec>, %value:i64) -> i32 {
+^entry:
+    %len = call @std_vec_len(%vec)
+    %status = call @std_vec_insert(%vec, %len, %value)
+    return %status
+}
+export c fn @std_vec_insert(%vec:ptr<StdVec>, %index:u64, %value:i64) -> i32 {
+^entry:
+    %len = call @std_vec_len(%vec)
+    %fits = le %index, %len
+    branch %fits, ^reserve(%len), ^range()
+^reserve(%len:u64):
+    %next = add %len, 1
+    %status = call @std_vec_reserve(%vec, %next)
+    %ok = eq %status, 0
+    branch %ok, ^write(%len, %next), ^error(%status)
+^write(%len:u64, %next:u64):
+    %dp = field %vec, data
+    %data = load %dp
+    %idx:i64 = cast %index
+    %at = offset %data, %idx
+    %after = offset %at, 1
+    %count = sub %len, %index
+    %bytes = mul %count, 8
+    move %after, %at, %bytes
+    store %at, %value
+    %lp = field %vec, len
+    store %lp, %next
+    return 0
+^range:
+    return 2
+^error(%status:i32):
+    return %status
+}
+export c fn @std_vec_remove(%vec:ptr<StdVec>, %index:u64, %out:ptr<i64>) -> i32 {
+^entry:
+    %len = call @std_vec_len(%vec)
+    %fits = lt %index, %len
+    branch %fits, ^remove(%len), ^range()
+^remove(%len:u64):
+    %dp = field %vec, data
+    %data = load %dp
+    %idx:i64 = cast %index
+    %at = offset %data, %idx
+    %value = load %at
+    %after = offset %at, 1
+    %next = sub %len, 1
+    %count = sub %next, %index
+    %bytes = mul %count, 8
+    move %at, %after, %bytes
+    %lp = field %vec, len
+    store %lp, %next
+    store %out, %value
+    return 0
+^range:
+    return 2
+}
+
+fn @sift(%data:ptr<i64>, %size:u64, %root:u64) -> void {
+^entry:
+    jump ^loop(%root)
+^loop(%r:u64):
+    %double = mul %r, 2
+    %child = add %double, 1
+    %fits = lt %child, %size
+    branch %fits, ^choose(%r, %child), ^done()
+^choose(%r:u64, %child:u64):
+    %right = add %child, 1
+    %has = lt %right, %size
+    branch %has, ^compare(%r, %child, %right), ^swap(%r, %child)
+^compare(%r:u64, %child:u64, %right:u64):
+    %ci:i64 = cast %child
+    %ri:i64 = cast %right
+    %cp = offset %data, %ci
+    %rp = offset %data, %ri
+    %cv = load %cp
+    %rv = load %rp
+    %greater = gt %rv, %cv
+    branch %greater, ^swap(%r, %right), ^swap(%r, %child)
+^swap(%r:u64, %child:u64):
+    %ri:i64 = cast %r
+    %ci:i64 = cast %child
+    %rp = offset %data, %ri
+    %cp = offset %data, %ci
+    %rv = load %rp
+    %cv = load %cp
+    %greater = gt %cv, %rv
+    branch %greater, ^write(%child, %rp, %cp, %rv, %cv), ^done()
+^write(%child:u64, %rp:ptr<i64>, %cp:ptr<i64>, %rv:i64, %cv:i64):
+    store %rp, %cv
+    store %cp, %rv
+    jump ^loop(%child)
+^done:
+    return
+}
+export c fn @std_vec_sort(%vec:ptr<StdVec>) -> void {
+^entry:
+    %n = call @std_vec_len(%vec)
+    %dp = field %vec, data
+    %data = load %dp
+    %half = div %n, 2
+    jump ^heap(%data, %n, %half)
+^heap(%data:ptr<i64>, %n:u64, %i:u64):
+    %end = eq %i, 0
+    branch %end, ^extract(%data, %n), ^build(%data, %n, %i)
+^build(%data:ptr<i64>, %n:u64, %i:u64):
+    %prev = sub %i, 1
+    call @sift(%data, %n, %prev)
+    jump ^heap(%data, %n, %prev)
+^extract(%data:ptr<i64>, %n:u64):
+    %done = le %n, 1
+    branch %done, ^done(), ^swap(%data, %n)
+^swap(%data:ptr<i64>, %n:u64):
+    %last = sub %n, 1
+    %idx:i64 = cast %last
+    %p = offset %data, %idx
+    %a = load %data
+    %b = load %p
+    store %data, %b
+    store %p, %a
+    call @sift(%data, %last, 0)
+    jump ^extract(%data, %last)
+^done:
+    return
+}
+export c fn @std_vec_search(%vec:ptr<StdVec>, %value:i64, %out:ptr<u64>) -> i32 {
+^entry:
+    %n = call @std_vec_len(%vec)
+    %dp = field %vec, data
+    %data = load %dp
+    jump ^loop(%data, %n, 0, %n)
+^loop(%data:ptr<i64>, %n:u64, %lo:u64, %hi:u64):
+    %end = eq %lo, %hi
+    branch %end, ^check(%data, %n, %lo), ^step(%data, %n, %lo, %hi)
+^step(%data:ptr<i64>, %n:u64, %lo:u64, %hi:u64):
+    %distance = sub %hi, %lo
+    %half = div %distance, 2
+    %mid = add %lo, %half
+    %idx:i64 = cast %mid
+    %p = offset %data, %idx
+    %v = load %p
+    %less = lt %v, %value
+    %next = add %mid, 1
+    branch %less, ^loop(%data, %n, %next, %hi), ^loop(%data, %n, %lo, %mid)
+^check(%data:ptr<i64>, %n:u64, %i:u64):
+    %fits = lt %i, %n
+    branch %fits, ^equal(%data, %i), ^missing()
+^equal(%data:ptr<i64>, %i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %v = load %p
+    %same = eq %v, %value
+    branch %same, ^found(%i), ^missing()
+^found(%i:u64):
+    store %out, %i
+    return 0
+^missing:
+    return 4
+}

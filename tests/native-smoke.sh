@@ -16,6 +16,8 @@ test "$status" -eq 42
 "$compiler" inspect examples/linked_list.lm0 --function main --block entry
 "$compiler" run examples/v2/count.lm0
 "$compiler" describe add cast
+"$compiler" library describe std_text std_text_parse_i64
+"$compiler" check examples/stdlib/statistics.lm0
 "$compiler" migrate examples/add.lm0 -o "$temporary/add.v2.lm0"
 "$compiler" inspect "$temporary/add.v2.lm0" --function main --block entry --view compact
 "$compiler" emit-asm "$temporary/add.v2.lm0" --entry -o "$temporary/add.v2.s"

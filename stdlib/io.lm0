@@ -1,0 +1,84 @@
+module io version 2
+use std_bytes
+extern c fn @std_io_open(%path:ptr<u8>, %len:u64, %mode:i32, %out:ptr<ptr<StdFile>>) -> i32
+extern c fn @std_io_close(%file:ptr<StdFile>) -> i32
+extern c fn @std_io_read(%file:ptr<StdFile>, %data:ptr<u8>, %capacity:u64, %count:ptr<u64>) -> i32
+extern c fn @std_io_write(%file:ptr<StdFile>, %data:ptr<u8>, %len:u64, %count:ptr<u64>) -> i32
+
+export c fn @std_io_read_file(%path:ptr<u8>, %len:u64, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %file_slot = stack ptr<StdFile>, 1
+    %buf_slot = stack ptr<StdBuf>, 1
+    %temp = stack u8, 4096
+    %count = stack u64, 1
+    %status = call @std_io_open(%path, %len, 0, %file_slot)
+    %ok = eq %status, 0
+    branch %ok, ^buffer(%file_slot, %buf_slot, %temp, %count), ^error(%status)
+^buffer(%file_slot:ptr<ptr<StdFile>>, %buf_slot:ptr<ptr<StdBuf>>, %temp:ptr<u8>, %count:ptr<u64>):
+    %file = load %file_slot
+    %status = call @std_bytes_new(%buf_slot)
+    %ok = eq %status, 0
+    branch %ok, ^start(%file, %buf_slot, %temp, %count), ^close_error(%file, %status)
+^start(%file:ptr<StdFile>, %buf_slot:ptr<ptr<StdBuf>>, %temp:ptr<u8>, %count:ptr<u64>):
+    %buf = load %buf_slot
+    jump ^loop(%file, %buf, %temp, %count)
+^loop(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %temp:ptr<u8>, %count:ptr<u64>):
+    %lp = field %buf, len
+    %used = load %lp
+    %room = sub %limit, %used
+    %small = lt %room, 4096
+    branch %small, ^small(%file, %buf, %temp, %count, %room), ^read(%file, %buf, %temp, %count, %room, 4096)
+^small(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %temp:ptr<u8>, %count:ptr<u64>, %room:u64):
+    %size = add %room, 1
+    jump ^read(%file, %buf, %temp, %count, %room, %size)
+^read(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %temp:ptr<u8>, %count:ptr<u64>, %room:u64, %size:u64):
+    %status = call @std_io_read(%file, %temp, %size, %count)
+    %eof = eq %status, 8
+    branch %eof, ^finish(%file, %buf), ^status(%file, %buf, %temp, %count, %room, %status)
+^status(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %temp:ptr<u8>, %count:ptr<u64>, %room:u64, %status:i32):
+    %ok = eq %status, 0
+    branch %ok, ^limit(%file, %buf, %temp, %count, %room), ^cleanup(%file, %buf, %status)
+^limit(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %temp:ptr<u8>, %count:ptr<u64>, %room:u64):
+    %n = load %count
+    %fits = le %n, %room
+    branch %fits, ^append(%file, %buf, %temp, %count, %n), ^cleanup(%file, %buf, 9)
+^append(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %temp:ptr<u8>, %count:ptr<u64>, %n:u64):
+    %status = call @std_bytes_append(%buf, %temp, %n)
+    %ok = eq %status, 0
+    branch %ok, ^loop(%file, %buf, %temp, %count), ^cleanup(%file, %buf, %status)
+^finish(%file:ptr<StdFile>, %buf:ptr<StdBuf>):
+    %status = call @std_io_close(%file)
+    %ok = eq %status, 0
+    branch %ok, ^done(%buf), ^destroy_error(%buf, %status)
+^done(%buf:ptr<StdBuf>):
+    store %out, %buf
+    return 0
+^cleanup(%file:ptr<StdFile>, %buf:ptr<StdBuf>, %status:i32):
+    call @std_bytes_destroy(%buf)
+    jump ^close_error(%file, %status)
+^close_error(%file:ptr<StdFile>, %status:i32):
+    %closed = call @std_io_close(%file)
+    return %status
+^destroy_error(%buf:ptr<StdBuf>, %status:i32):
+    call @std_bytes_destroy(%buf)
+    return %status
+^error(%status:i32):
+    return %status
+}
+
+export c fn @std_io_write_file(%path:ptr<u8>, %len:u64, %data:ptr<u8>, %size:u64) -> i32 {
+^entry:
+    %slot = stack ptr<StdFile>, 1
+    %count = stack u64, 1
+    %status = call @std_io_open(%path, %len, 1, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^write(%slot, %count), ^error(%status)
+^write(%slot:ptr<ptr<StdFile>>, %count:ptr<u64>):
+    %file = load %slot
+    %status = call @std_io_write(%file, %data, %size, %count)
+    %closed = call @std_io_close(%file)
+    %ok = eq %status, 0
+    branch %ok, ^error(%closed), ^error(%status)
+^error(%status:i32):
+    return %status
+}

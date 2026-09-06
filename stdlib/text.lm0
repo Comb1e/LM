@@ -1,0 +1,249 @@
+module text version 2
+use std_bytes
+
+export c fn @std_text_next(%data:ptr<u8>, %len:u64, %index:ptr<u64>, %scalar:ptr<u32>) -> i32 {
+^entry:
+    %i = load %index
+    %end = eq %i, %len
+    branch %end, ^eof(), ^range(%i)
+^range(%i:u64):
+    %fits = lt %i, %len
+    branch %fits, ^first(%i), ^bad_range()
+^first(%i:u64):
+    %at:i64 = cast %i
+    %p = offset %data, %at
+    %b = load %p
+    %ascii = lt %b, 128
+    %v:u32 = cast %b
+    branch %ascii, ^done(%i, 1, %v), ^two(%i, %v)
+^two(%i:u64, %v:u32):
+    %delta = sub %v, 194
+    %valid = lt %delta, 30
+    %head = and %v, 31
+    branch %valid, ^length(%i, 2, %head, 128), ^three(%i, %v)
+^three(%i:u64, %v:u32):
+    %delta = sub %v, 224
+    %valid = lt %delta, 16
+    %head = and %v, 15
+    branch %valid, ^length(%i, 3, %head, 2048), ^four(%i, %v)
+^four(%i:u64, %v:u32):
+    %delta = sub %v, 240
+    %valid = lt %delta, 5
+    %head = and %v, 7
+    branch %valid, ^length(%i, 4, %head, 65536), ^encoding()
+^length(%i:u64, %n:u64, %v:u32, %min:u32):
+    %remaining = sub %len, %i
+    %fits = le %n, %remaining
+    branch %fits, ^tail(%i, %n, 1, %v, %min), ^encoding()
+^tail(%i:u64, %n:u64, %j:u64, %v:u32, %min:u32):
+    %end = eq %j, %n
+    branch %end, ^validate(%i, %n, %v, %min), ^read(%i, %n, %j, %v, %min)
+^read(%i:u64, %n:u64, %j:u64, %v:u32, %min:u32):
+    %at = add %i, %j
+    %idx:i64 = cast %at
+    %p = offset %data, %idx
+    %b = load %p
+    %bits = sub %b, 128
+    %valid = lt %bits, 64
+    %wide:u32 = cast %bits
+    %shift = shl %v, 6
+    %next = or %shift, %wide
+    %k = add %j, 1
+    branch %valid, ^tail(%i, %n, %k, %next, %min), ^encoding()
+^validate(%i:u64, %n:u64, %v:u32, %min:u32):
+    %lo = ge %v, %min
+    branch %lo, ^upper(%i, %n, %v), ^encoding()
+^upper(%i:u64, %n:u64, %v:u32):
+    %hi = le %v, 1114111
+    branch %hi, ^surrogate(%i, %n, %v), ^encoding()
+^surrogate(%i:u64, %n:u64, %v:u32):
+    %delta = sub %v, 55296
+    %ok = ge %delta, 2048
+    branch %ok, ^done(%i, %n, %v), ^encoding()
+^done(%i:u64, %n:u64, %v:u32):
+    %next = add %i, %n
+    store %index, %next
+    store %scalar, %v
+    return 0
+^eof:
+    return 8
+^encoding:
+    return 5
+^bad_range:
+    return 2
+}
+
+export c fn @std_text_validate(%data:ptr<u8>, %len:u64) -> i32 {
+^entry:
+    %idx = stack u64, 1
+    %scalar = stack u32, 1
+    store %idx, 0
+    jump ^loop(%idx, %scalar)
+^loop(%idx:ptr<u64>, %scalar:ptr<u32>):
+    %status = call @std_text_next(%data, %len, %idx, %scalar)
+    %ok = eq %status, 0
+    branch %ok, ^loop(%idx, %scalar), ^end(%status)
+^end(%status:i32):
+    %eof = eq %status, 8
+    branch %eof, ^success(), ^failure(%status)
+^success:
+    return 0
+^failure(%status:i32):
+    return %status
+}
+
+fn @ascii_case(%data:ptr<u8>, %len:u64, %lo:u8, %hi:u8, %delta:u8) -> void {
+^entry:
+    jump ^loop(0)
+^loop(%i:u64):
+    %end = eq %i, %len
+    branch %end, ^done(), ^read(%i)
+^read(%i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %distance = sub %b, %lo
+    %width = sub %hi, %lo
+    %convert = le %distance, %width
+    branch %convert, ^write(%i, %p, %b), ^next(%i)
+^write(%i:u64, %p:ptr<u8>, %b:u8):
+    %v = add %b, %delta
+    store %p, %v
+    jump ^next(%i)
+^next(%i:u64):
+    %n = add %i, 1
+    jump ^loop(%n)
+^done:
+    return
+}
+export c fn @std_text_lower_ascii(%data:ptr<u8>, %len:u64) -> void {
+^entry:
+    call @ascii_case(%data, %len, 65, 90, 32)
+    return
+}
+export c fn @std_text_upper_ascii(%data:ptr<u8>, %len:u64) -> void {
+^entry:
+    call @ascii_case(%data, %len, 97, 122, 224)
+    return
+}
+
+export c fn @std_text_parse_u64(%data:ptr<u8>, %len:u64, %out:ptr<u64>) -> i32 {
+^entry:
+    %empty = eq %len, 0
+    branch %empty, ^parse(), ^loop(0, 0)
+^loop(%i:u64, %value:u64):
+    %end = eq %i, %len
+    branch %end, ^done(%value), ^digit(%i, %value)
+^digit(%i:u64, %value:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %d = sub %b, 48
+    %valid = lt %d, 10
+    %wide:u64 = cast %d
+    branch %valid, ^check(%i, %value, %wide), ^parse()
+^check(%i:u64, %value:u64, %digit:u64):
+    %room = sub 18446744073709551615:u64, %digit
+    %limit = div %room, 10
+    %fits = le %value, %limit
+    branch %fits, ^step(%i, %value, %digit), ^range()
+^step(%i:u64, %value:u64, %digit:u64):
+    %ten = mul %value, 10
+    %next = add %ten, %digit
+    %j = add %i, 1
+    jump ^loop(%j, %next)
+^done(%value:u64):
+    store %out, %value
+    return 0
+^parse:
+    return 6
+^range:
+    return 2
+}
+
+export c fn @std_text_parse_i64(%data:ptr<u8>, %len:u64, %out:ptr<i64>) -> i32 {
+^entry:
+    %slot = stack u64, 1
+    %empty = eq %len, 0
+    branch %empty, ^parse(), ^sign(%slot)
+^sign(%slot:ptr<u64>):
+    %b = load %data
+    %minus = eq %b, 45
+    branch %minus, ^negative(%slot), ^convert(%slot, %data, %len, false)
+^negative(%slot:ptr<u64>):
+    %p = offset %data, 1
+    %n = sub %len, 1
+    jump ^convert(%slot, %p, %n, true)
+^convert(%slot:ptr<u64>, %p:ptr<u8>, %n:u64, %negative:bool):
+    %status = call @std_text_parse_u64(%p, %n, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^check(%slot, %negative), ^error(%status)
+^check(%slot:ptr<u64>, %negative:bool):
+    %v = load %slot
+    branch %negative, ^negcheck(%v), ^poscheck(%v)
+^negcheck(%v:u64):
+    %fits = le %v, 9223372036854775808
+    %neg = neg %v
+    %signed:i64 = cast %neg
+    branch %fits, ^done(%signed), ^range()
+^poscheck(%v:u64):
+    %fits = le %v, 9223372036854775807
+    %signed:i64 = cast %v
+    branch %fits, ^done(%signed), ^range()
+^done(%v:i64):
+    store %out, %v
+    return 0
+^parse:
+    return 6
+^range:
+    return 2
+^error(%status:i32):
+    return %status
+}
+
+fn @format_decimal(%value:u64, %negative:bool, %out:ptr<StdBuf>) -> i32 {
+^entry:
+    %temp = stack u8, 21
+    jump ^digits(%temp, 21, %value)
+^digits(%temp:ptr<u8>, %i:i64, %v:u64):
+    %digit = rem %v, 10
+    %ascii = add %digit, 48
+    %byte:u8 = cast %ascii
+    %at = sub %i, 1
+    %p = offset %temp, %at
+    store %p, %byte
+    %next = div %v, 10
+    %done = eq %next, 0
+    branch %done, ^sign(%temp, %at), ^digits(%temp, %at, %next)
+^sign(%temp:ptr<u8>, %i:i64):
+    branch %negative, ^minus(%temp, %i), ^append(%temp, %i)
+^minus(%temp:ptr<u8>, %i:i64):
+    %at = sub %i, 1
+    %p = offset %temp, %at
+    store %p, 45
+    jump ^append(%temp, %at)
+^append(%temp:ptr<u8>, %i:i64):
+    %p = offset %temp, %i
+    %count = sub 21:i64, %i
+    %n:u64 = cast %count
+    %status = call @std_bytes_append(%out, %p, %n)
+    return %status
+}
+export c fn @std_text_format_u64(%value:u64, %out:ptr<StdBuf>) -> i32 {
+^entry:
+    %status = call @format_decimal(%value, false, %out)
+    return %status
+}
+export c fn @std_text_format_i64(%value:i64, %out:ptr<StdBuf>) -> i32 {
+^entry:
+    %negative = lt %value, 0
+    %bits:u64 = cast %value
+    branch %negative, ^negative(%bits), ^positive(%bits)
+^negative(%bits:u64):
+    %magnitude = neg %bits
+    %status = call @format_decimal(%magnitude, true, %out)
+    return %status
+^positive(%bits:u64):
+    %status = call @format_decimal(%bits, false, %out)
+    return %status
+}

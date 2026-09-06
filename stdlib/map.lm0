@@ -1,0 +1,354 @@
+module map version 2
+use std_bytes
+
+fn @hash(%key:ptr<u8>, %len:u64) -> u64 {
+^entry:
+    jump ^loop(0, 14695981039346656037)
+^loop(%i:u64, %h:u64):
+    %end = eq %i, %len
+    branch %end, ^done(%h), ^step(%i, %h)
+^step(%i:u64, %h:u64):
+    %idx:i64 = cast %i
+    %p = offset %key, %idx
+    %b = load %p
+    %wide:u64 = cast %b
+    %x = xor %h, %wide
+    %next = mul %x, 1099511628211
+    %j = add %i, 1
+    jump ^loop(%j, %next)
+^done(%h:u64):
+    return %h
+}
+
+# At least half of the slots are empty after growth. Tombstones are reused.
+fn @slot(%map:ptr<StdMap>, %key:ptr<u8>, %len:u64, %hash:u64) -> ptr<StdSlot> {
+^entry:
+    %cp = field %map, cap
+    %cap = load %cp
+    %empty = eq %cap, 0
+    branch %empty, ^none(), ^start(%cap)
+^start(%cap:u64):
+    %sp = field %map, slots
+    %slots = load %sp
+    %i = rem %hash, %cap
+    jump ^loop(%slots, %cap, %i, null)
+^loop(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %tomb:ptr<StdSlot>):
+    %idx:i64 = cast %i
+    %s = offset %slots, %idx
+    %statep = field %s, state
+    %state = load %statep
+    %empty = eq %state, 0
+    branch %empty, ^empty(%s, %tomb), ^occupied(%slots, %cap, %i, %tomb, %s, %state)
+^empty(%s:ptr<StdSlot>, %tomb:ptr<StdSlot>):
+    %none = eq %tomb, null
+    branch %none, ^found(%s), ^found(%tomb)
+^occupied(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %tomb:ptr<StdSlot>, %s:ptr<StdSlot>, %state:u8):
+    %deleted = eq %state, 2
+    branch %deleted, ^tombstone(%slots, %cap, %i, %tomb, %s), ^match(%slots, %cap, %i, %tomb, %s)
+^tombstone(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %tomb:ptr<StdSlot>, %s:ptr<StdSlot>):
+    %none = eq %tomb, null
+    branch %none, ^next(%slots, %cap, %i, %s), ^next(%slots, %cap, %i, %tomb)
+^match(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %tomb:ptr<StdSlot>, %s:ptr<StdSlot>):
+    %hp = field %s, hash
+    %h = load %hp
+    %same = eq %h, %hash
+    branch %same, ^key(%slots, %cap, %i, %tomb, %s), ^next(%slots, %cap, %i, %tomb)
+^key(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %tomb:ptr<StdSlot>, %s:ptr<StdSlot>):
+    %kp = field %s, key
+    %lp = field %s, len
+    %k = load %kp
+    %n = load %lp
+    %cmp = call @std_bytes_compare(%key, %len, %k, %n)
+    %same = eq %cmp, 0
+    branch %same, ^found(%s), ^next(%slots, %cap, %i, %tomb)
+^next(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %tomb:ptr<StdSlot>):
+    %j = add %i, 1
+    %next = rem %j, %cap
+    jump ^loop(%slots, %cap, %next, %tomb)
+^found(%s:ptr<StdSlot>):
+    return %s
+^none:
+    return null
+}
+
+export c fn @std_map_new(%out:ptr<ptr<StdMap>>) -> i32 {
+^entry:
+    %raw:ptr<ptr<void>> = cast %out
+    %size = sizeof StdMap
+    %status = call @std_core_allocate(1, %size, %raw)
+    return %status
+}
+export c fn @std_map_len(%map:ptr<StdMap>) -> u64 {
+^entry:
+    %p = field %map, len
+    %n = load %p
+    return %n
+}
+export c fn @std_map_destroy(%map:ptr<StdMap>) -> void {
+^entry:
+    %null = eq %map, null
+    branch %null, ^done(), ^start()
+^start:
+    %sp = field %map, slots
+    %cp = field %map, cap
+    %slots = load %sp
+    %cap = load %cp
+    jump ^loop(%slots, %cap, 0)
+^loop(%slots:ptr<StdSlot>, %cap:u64, %i:u64):
+    %end = eq %i, %cap
+    branch %end, ^release(%slots), ^check(%slots, %cap, %i)
+^check(%slots:ptr<StdSlot>, %cap:u64, %i:u64):
+    %idx:i64 = cast %i
+    %s = offset %slots, %idx
+    %sp = field %s, state
+    %state = load %sp
+    %live = eq %state, 1
+    branch %live, ^key(%slots, %cap, %i, %s), ^next(%slots, %cap, %i)
+^key(%slots:ptr<StdSlot>, %cap:u64, %i:u64, %s:ptr<StdSlot>):
+    %kp = field %s, key
+    %key = load %kp
+    %raw:ptr<void> = cast %key
+    call @std_core_release(%raw)
+    jump ^next(%slots, %cap, %i)
+^next(%slots:ptr<StdSlot>, %cap:u64, %i:u64):
+    %j = add %i, 1
+    jump ^loop(%slots, %cap, %j)
+^release(%slots:ptr<StdSlot>):
+    %raw:ptr<void> = cast %slots
+    call @std_core_release(%raw)
+    %handle:ptr<void> = cast %map
+    call @std_core_release(%handle)
+    return
+^done:
+    return
+}
+
+fn @grow(%map:ptr<StdMap>) -> i32 {
+^entry:
+    %temp = stack StdMap, 1
+    %sp = field %temp, slots
+    %cp = field %temp, cap
+    %oldcp = field %map, cap
+    %oldcap = load %oldcp
+    %empty = eq %oldcap, 0
+    branch %empty, ^initial(%temp, %sp, %cp), ^double(%temp, %sp, %cp, %oldcap)
+^initial(%temp:ptr<StdMap>, %sp:ptr<ptr<StdSlot>>, %cp:ptr<u64>):
+    %cap = call @std_core_initial_capacity()
+    jump ^allocate(%temp, %sp, %cp, %cap)
+^double(%temp:ptr<StdMap>, %sp:ptr<ptr<StdSlot>>, %cp:ptr<u64>, %old:u64):
+    %cap = mul %old, 2
+    jump ^allocate(%temp, %sp, %cp, %cap)
+^allocate(%temp:ptr<StdMap>, %sp:ptr<ptr<StdSlot>>, %cp:ptr<u64>, %cap:u64):
+    %raw:ptr<ptr<void>> = cast %sp
+    %width = sizeof StdSlot
+    %status = call @std_core_allocate(%cap, %width, %raw)
+    %ok = eq %status, 0
+    branch %ok, ^start(%temp, %cp, %cap), ^error(%status)
+^start(%temp:ptr<StdMap>, %cp:ptr<u64>, %cap:u64):
+    store %cp, %cap
+    %op = field %map, slots
+    %oc = field %map, cap
+    %old = load %op
+    %count = load %oc
+    jump ^loop(%temp, %old, %count, 0)
+^loop(%temp:ptr<StdMap>, %old:ptr<StdSlot>, %count:u64, %i:u64):
+    %end = eq %i, %count
+    branch %end, ^commit(%temp, %old), ^check(%temp, %old, %count, %i)
+^check(%temp:ptr<StdMap>, %old:ptr<StdSlot>, %count:u64, %i:u64):
+    %idx:i64 = cast %i
+    %s = offset %old, %idx
+    %statep = field %s, state
+    %state = load %statep
+    %live = eq %state, 1
+    branch %live, ^rehash(%temp, %old, %count, %i, %s), ^next(%temp, %old, %count, %i)
+^rehash(%temp:ptr<StdMap>, %old:ptr<StdSlot>, %count:u64, %i:u64, %s:ptr<StdSlot>):
+    %kp = field %s, key
+    %lp = field %s, len
+    %hp = field %s, hash
+    %key = load %kp
+    %len = load %lp
+    %hash = load %hp
+    %dest = call @slot(%temp, %key, %len, %hash)
+    %size = sizeof StdSlot
+    copy %dest, %s, %size
+    jump ^next(%temp, %old, %count, %i)
+^next(%temp:ptr<StdMap>, %old:ptr<StdSlot>, %count:u64, %i:u64):
+    %j = add %i, 1
+    jump ^loop(%temp, %old, %count, %j)
+^commit(%temp:ptr<StdMap>, %old:ptr<StdSlot>):
+    %sp = field %temp, slots
+    %cp = field %temp, cap
+    %slots = load %sp
+    %cap = load %cp
+    %dp = field %map, slots
+    %dc = field %map, cap
+    %dt = field %map, tombs
+    store %dp, %slots
+    store %dc, %cap
+    store %dt, 0
+    %raw:ptr<void> = cast %old
+    call @std_core_release(%raw)
+    return 0
+^error(%status:i32):
+    return %status
+}
+
+export c fn @std_map_get(%map:ptr<StdMap>, %key:ptr<u8>, %len:u64, %out:ptr<i64>) -> i32 {
+^entry:
+    %h = call @hash(%key, %len)
+    %s = call @slot(%map, %key, %len, %h)
+    %null = eq %s, null
+    branch %null, ^missing(), ^check(%s)
+^check(%s:ptr<StdSlot>):
+    %sp = field %s, state
+    %state = load %sp
+    %live = eq %state, 1
+    branch %live, ^found(%s), ^missing()
+^found(%s:ptr<StdSlot>):
+    %vp = field %s, value
+    %value = load %vp
+    store %out, %value
+    return 0
+^missing:
+    return 4
+}
+
+export c fn @std_map_set(%map:ptr<StdMap>, %key:ptr<u8>, %len:u64, %value:i64) -> i32 {
+^entry:
+    %keyslot = stack ptr<void>, 1
+    %h = call @hash(%key, %len)
+    %s = call @slot(%map, %key, %len, %h)
+    %null = eq %s, null
+    branch %null, ^copy(%keyslot, %h), ^exists(%keyslot, %h, %s)
+^exists(%keyslot:ptr<ptr<void>>, %h:u64, %s:ptr<StdSlot>):
+    %sp = field %s, state
+    %state = load %sp
+    %live = eq %state, 1
+    branch %live, ^replace(%s), ^copy(%keyslot, %h)
+^replace(%s:ptr<StdSlot>):
+    %vp = field %s, value
+    store %vp, %value
+    return 0
+^copy(%keyslot:ptr<ptr<void>>, %h:u64):
+    %status = call @std_core_allocate(%len, 1, %keyslot)
+    %ok = eq %status, 0
+    branch %ok, ^capacity(%keyslot, %h), ^error(%status)
+^capacity(%keyslot:ptr<ptr<void>>, %h:u64):
+    %raw = load %keyslot
+    %owned:ptr<u8> = cast %raw
+    copy %owned, %key, %len
+    %lp = field %map, len
+    %tp = field %map, tombs
+    %cp = field %map, cap
+    %n = load %lp
+    %t = load %tp
+    %c = load %cp
+    %used = add %n, %t
+    %half = div %c, 2
+    %full = ge %used, %half
+    branch %full, ^expand(%owned, %h), ^insert(%owned, %h)
+^expand(%owned:ptr<u8>, %h:u64):
+    %status = call @grow(%map)
+    %ok = eq %status, 0
+    branch %ok, ^insert(%owned, %h), ^cleanup(%owned, %status)
+^insert(%owned:ptr<u8>, %h:u64):
+    %s = call @slot(%map, %owned, %len, %h)
+    %sp = field %s, state
+    %state = load %sp
+    %tomb = eq %state, 2
+    branch %tomb, ^untomb(%owned, %h, %s), ^write(%owned, %h, %s)
+^untomb(%owned:ptr<u8>, %h:u64, %s:ptr<StdSlot>):
+    %tp = field %map, tombs
+    %t = load %tp
+    %next = sub %t, 1
+    store %tp, %next
+    jump ^write(%owned, %h, %s)
+^write(%owned:ptr<u8>, %h:u64, %s:ptr<StdSlot>):
+    %kp = field %s, key
+    %lp = field %s, len
+    %hp = field %s, hash
+    %vp = field %s, value
+    %sp = field %s, state
+    store %kp, %owned
+    store %lp, %len
+    store %hp, %h
+    store %vp, %value
+    store %sp, 1
+    %np = field %map, len
+    %n = load %np
+    %next = add %n, 1
+    store %np, %next
+    return 0
+^cleanup(%owned:ptr<u8>, %status:i32):
+    %raw:ptr<void> = cast %owned
+    call @std_core_release(%raw)
+    return %status
+^error(%status:i32):
+    return %status
+}
+
+export c fn @std_map_remove(%map:ptr<StdMap>, %key:ptr<u8>, %len:u64) -> i32 {
+^entry:
+    %h = call @hash(%key, %len)
+    %s = call @slot(%map, %key, %len, %h)
+    %null = eq %s, null
+    branch %null, ^missing(), ^check(%s)
+^check(%s:ptr<StdSlot>):
+    %sp = field %s, state
+    %state = load %sp
+    %live = eq %state, 1
+    branch %live, ^remove(%s), ^missing()
+^remove(%s:ptr<StdSlot>):
+    %kp = field %s, key
+    %owned = load %kp
+    %raw:ptr<void> = cast %owned
+    call @std_core_release(%raw)
+    %sp = field %s, state
+    store %sp, 2
+    %lp = field %map, len
+    %tp = field %map, tombs
+    %n = load %lp
+    %t = load %tp
+    %nn = sub %n, 1
+    %nt = add %t, 1
+    store %lp, %nn
+    store %tp, %nt
+    return 0
+^missing:
+    return 4
+}
+
+export c fn @std_map_next(%map:ptr<StdMap>, %cursor:ptr<u64>, %key:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<i64>) -> i32 {
+^entry:
+    %sp = field %map, slots
+    %cp = field %map, cap
+    %slots = load %sp
+    %cap = load %cp
+    %i = load %cursor
+    jump ^loop(%slots, %cap, %i)
+^loop(%slots:ptr<StdSlot>, %cap:u64, %i:u64):
+    %end = ge %i, %cap
+    branch %end, ^eof(), ^check(%slots, %cap, %i)
+^check(%slots:ptr<StdSlot>, %cap:u64, %i:u64):
+    %idx:i64 = cast %i
+    %s = offset %slots, %idx
+    %sp = field %s, state
+    %state = load %sp
+    %live = eq %state, 1
+    %next = add %i, 1
+    branch %live, ^found(%s, %next), ^loop(%slots, %cap, %next)
+^found(%s:ptr<StdSlot>, %next:u64):
+    %kp = field %s, key
+    %lp = field %s, len
+    %vp = field %s, value
+    %k = load %kp
+    %n = load %lp
+    %v = load %vp
+    store %key, %k
+    store %len, %n
+    store %value, %v
+    store %cursor, %next
+    return 0
+^eof:
+    return 8
+}

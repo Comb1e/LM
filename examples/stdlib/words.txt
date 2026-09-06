@@ -1,0 +1,2 @@
+LM0 libraries make LM0 programs smaller.
+Libraries make programs reusable.

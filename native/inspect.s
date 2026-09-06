@@ -5,6 +5,8 @@ FUNC select_source
  C find, "qword ptr [functions]", "qword ptr [cli_function]"
  test rax,rax
  jz .function_error
+ cmp qword ptr [rax+ORIGIN],0
+ jne .library_source_error
  mov r12,rax
  cmp qword ptr [cli_block],0
  je .select_done
@@ -371,6 +373,7 @@ FUNC inspect_module
  je .inspect_no_unresolved
  call inspect_unresolved
 .inspect_no_unresolved:
+ call library_inspection
  C text_out, "offset j_output_end"
  RETURN
 

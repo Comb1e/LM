@@ -977,6 +977,10 @@ FUNC emit_asm
  C asm_symbol, rax
  EM a_main_wrapper, rax
 .emit_asm_end:
+ cmp qword ptr [library_used],0
+ je .emit_no_library
+ EM library_abi_reference,"offset library_identity"
+.emit_no_library:
  EM a_note
  mov qword ptr [cur_fn], 0
  mov qword ptr [cur_block], 0

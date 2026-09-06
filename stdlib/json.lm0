@@ -1,0 +1,1277 @@
+module json version 2
+use std_text
+
+struct JsonParser {
+    data:ptr<u8>
+    len:u64
+    index:u64
+    doc:ptr<StdJson>
+    current:ptr<StdJsonNode>
+    key:ptr<StdBuf>
+    depth:u64
+    limit:u64
+    state:i32
+}
+
+export c fn @std_json_new(%out:ptr<ptr<StdJson>>) -> i32 {
+^entry:
+    %raw:ptr<ptr<void>> = cast %out
+    %size = sizeof StdJson
+    %status = call @std_core_allocate(1, %size, %raw)
+    return %status
+}
+export c fn @std_json_destroy(%doc:ptr<StdJson>) -> void {
+^entry:
+    %null = eq %doc, null
+    branch %null, ^done(), ^start()
+^start:
+    %hp = field %doc, head
+    %head = load %hp
+    jump ^loop(%head)
+^loop(%node:ptr<StdJsonNode>):
+    %end = eq %node, null
+    branch %end, ^release(), ^node(%node)
+^node(%node:ptr<StdJsonNode>):
+    %np = field %node, allocated
+    %next = load %np
+    %tp = field %node, text
+    %kp = field %node, key
+    %text = load %tp
+    %key = load %kp
+    call @std_bytes_destroy(%text)
+    call @std_bytes_destroy(%key)
+    %raw:ptr<void> = cast %node
+    call @std_core_release(%raw)
+    jump ^loop(%next)
+^release:
+    %raw:ptr<void> = cast %doc
+    call @std_core_release(%raw)
+    return
+^done:
+    return
+}
+export c fn @std_json_root(%doc:ptr<StdJson>) -> ptr<StdJsonNode> {
+^entry:
+    %p = field %doc, root
+    %node = load %p
+    return %node
+}
+export c fn @std_json_kind(%node:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %p = field %node, kind
+    %kind = load %p
+    return %kind
+}
+export c fn @std_json_text(%node:ptr<StdJsonNode>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> i32 {
+^entry:
+    %kind = call @std_json_kind(%node)
+    %d = sub %kind, 3
+    %valid = le %d, 1
+    %lower = ge %d, 0
+    branch %valid, ^lower(%lower), ^invalid()
+^lower(%valid:bool):
+    branch %valid, ^view(), ^invalid()
+^view:
+    %tp = field %node, text
+    %text = load %tp
+    call @std_bytes_view(%text, %data, %len)
+    return 0
+^invalid:
+    return 1
+}
+export c fn @std_json_i64(%node:ptr<StdJsonNode>, %out:ptr<i64>) -> i32 {
+^entry:
+    %kind = call @std_json_kind(%node)
+    %valid = eq %kind, 3
+    branch %valid, ^parse(), ^invalid()
+^parse:
+    %tp = field %node, text
+    %text = load %tp
+    %dp = field %text, data
+    %lp = field %text, len
+    %data = load %dp
+    %len = load %lp
+    %status = call @std_text_parse_i64(%data, %len, %out)
+    return %status
+^invalid:
+    return 1
+}
+export c fn @std_json_get(%node:ptr<StdJsonNode>, %key:ptr<u8>, %len:u64, %out:ptr<ptr<StdJsonNode>>) -> i32 {
+^entry:
+    %kind = call @std_json_kind(%node)
+    %valid = eq %kind, 6
+    branch %valid, ^start(), ^invalid()
+^start:
+    %cp = field %node, child
+    %child = load %cp
+    jump ^loop(%child)
+^loop(%child:ptr<StdJsonNode>):
+    %end = eq %child, null
+    branch %end, ^missing(), ^compare(%child)
+^compare(%child:ptr<StdJsonNode>):
+    %kp = field %child, key
+    %buf = load %kp
+    %dp = field %buf, data
+    %lp = field %buf, len
+    %data = load %dp
+    %n = load %lp
+    %cmp = call @std_bytes_compare(%key, %len, %data, %n)
+    %same = eq %cmp, 0
+    branch %same, ^found(%child), ^next(%child)
+^next(%child:ptr<StdJsonNode>):
+    %np = field %child, next
+    %next = load %np
+    jump ^loop(%next)
+^found(%child:ptr<StdJsonNode>):
+    store %out, %child
+    return 0
+^invalid:
+    return 1
+^missing:
+    return 4
+}
+export c fn @std_json_at(%node:ptr<StdJsonNode>, %index:u64, %out:ptr<ptr<StdJsonNode>>) -> i32 {
+^entry:
+    %kind = call @std_json_kind(%node)
+    %valid = eq %kind, 5
+    branch %valid, ^start(), ^invalid()
+^start:
+    %cp = field %node, child
+    %child = load %cp
+    jump ^loop(%child, 0)
+^loop(%child:ptr<StdJsonNode>, %i:u64):
+    %end = eq %child, null
+    branch %end, ^range(), ^compare(%child, %i)
+^compare(%child:ptr<StdJsonNode>, %i:u64):
+    %same = eq %i, %index
+    branch %same, ^found(%child), ^next(%child, %i)
+^next(%child:ptr<StdJsonNode>, %i:u64):
+    %np = field %child, next
+    %next = load %np
+    %j = add %i, 1
+    jump ^loop(%next, %j)
+^found(%child:ptr<StdJsonNode>):
+    store %out, %child
+    return 0
+^invalid:
+    return 1
+^range:
+    return 2
+}
+
+# Decimal number DFA: start, integer-required, zero, integer, fraction-required,
+# fraction, exponent-sign, exponent-required, exponent. It stops at a delimiter.
+fn @number_end(%data:ptr<u8>, %len:u64, %start:u64, %out:ptr<u64>) -> i32 {
+^entry:
+    jump ^loop(%start, 0)
+^loop(%i:u64, %state:i32):
+    %end = ge %i, %len
+    branch %end, ^finish(%i, %state), ^read(%i, %state)
+^read(%i:u64, %state:i32):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %d = sub %b, 48
+    %digit = lt %d, 10
+    %initial = eq %state, 0
+    branch %initial, ^sign(%i, %b, %digit), ^dispatch1(%i, %state, %b, %digit)
+^sign(%i:u64, %b:u8, %digit:bool):
+    %minus = eq %b, 45
+    branch %minus, ^advance(%i, 1), ^integer(%i, %b, %digit)
+^dispatch1(%i:u64, %state:i32, %b:u8, %digit:bool):
+    %required = eq %state, 1
+    branch %required, ^integer(%i, %b, %digit), ^dispatch2(%i, %state, %b, %digit)
+^integer(%i:u64, %b:u8, %digit:bool):
+    branch %digit, ^first_digit(%i, %b), ^invalid()
+^first_digit(%i:u64, %b:u8):
+    %zero = eq %b, 48
+    branch %zero, ^advance(%i, 2), ^advance(%i, 3)
+^dispatch2(%i:u64, %state:i32, %b:u8, %digit:bool):
+    %zero = eq %state, 2
+    branch %zero, ^fraction_start(%i, %state, %b), ^dispatch3(%i, %state, %b, %digit)
+^dispatch3(%i:u64, %state:i32, %b:u8, %digit:bool):
+    %integer = eq %state, 3
+    branch %integer, ^integer_tail(%i, %state, %b, %digit), ^dispatch4(%i, %state, %b, %digit)
+^integer_tail(%i:u64, %state:i32, %b:u8, %digit:bool):
+    branch %digit, ^advance(%i, 3), ^fraction_start(%i, %state, %b)
+^fraction_start(%i:u64, %state:i32, %b:u8):
+    %dot = eq %b, 46
+    branch %dot, ^advance(%i, 4), ^exponent_start(%i, %state, %b)
+^dispatch4(%i:u64, %state:i32, %b:u8, %digit:bool):
+    %required = eq %state, 4
+    branch %required, ^fraction_required(%i, %digit), ^dispatch5(%i, %state, %b, %digit)
+^fraction_required(%i:u64, %digit:bool):
+    branch %digit, ^advance(%i, 5), ^invalid()
+^dispatch5(%i:u64, %state:i32, %b:u8, %digit:bool):
+    %fraction = eq %state, 5
+    branch %fraction, ^fraction_tail(%i, %state, %b, %digit), ^dispatch6(%i, %state, %b, %digit)
+^fraction_tail(%i:u64, %state:i32, %b:u8, %digit:bool):
+    branch %digit, ^advance(%i, 5), ^exponent_start(%i, %state, %b)
+^exponent_start(%i:u64, %state:i32, %b:u8):
+    %lower = or %b, 32
+    %e = eq %lower, 101
+    branch %e, ^advance(%i, 6), ^finish(%i, %state)
+^dispatch6(%i:u64, %state:i32, %b:u8, %digit:bool):
+    %sign = eq %state, 6
+    branch %sign, ^exponent_sign(%i, %b, %digit), ^dispatch7(%i, %state, %digit)
+^exponent_sign(%i:u64, %b:u8, %digit:bool):
+    %plus = eq %b, 43
+    branch %plus, ^advance(%i, 7), ^exponent_minus(%i, %b, %digit)
+^exponent_minus(%i:u64, %b:u8, %digit:bool):
+    %minus = eq %b, 45
+    branch %minus, ^advance(%i, 7), ^exponent_required(%i, %digit)
+^dispatch7(%i:u64, %state:i32, %digit:bool):
+    %required = eq %state, 7
+    branch %required, ^exponent_required(%i, %digit), ^exponent_tail(%i, %state, %digit)
+^exponent_required(%i:u64, %digit:bool):
+    branch %digit, ^advance(%i, 8), ^invalid()
+^exponent_tail(%i:u64, %state:i32, %digit:bool):
+    branch %digit, ^advance(%i, 8), ^finish(%i, %state)
+^advance(%i:u64, %state:i32):
+    %next = add %i, 1
+    jump ^loop(%next, %state)
+^finish(%i:u64, %state:i32):
+    %zero = eq %state, 2
+    branch %zero, ^done(%i), ^finish3(%i, %state)
+^finish3(%i:u64, %state:i32):
+    %integer = eq %state, 3
+    branch %integer, ^done(%i), ^finish5(%i, %state)
+^finish5(%i:u64, %state:i32):
+    %fraction = eq %state, 5
+    branch %fraction, ^done(%i), ^finish8(%i, %state)
+^finish8(%i:u64, %state:i32):
+    %exponent = eq %state, 8
+    branch %exponent, ^done(%i), ^invalid()
+^done(%i:u64):
+    store %out, %i
+    return 0
+^invalid:
+    return 6
+}
+
+export c fn @std_json_create(%doc:ptr<StdJson>, %kind:i32, %data:ptr<u8>, %len:u64, %out:ptr<ptr<StdJsonNode>>) -> i32 {
+^entry:
+    %end = stack u64, 1
+    %slot = stack ptr<void>, 1
+    %ts = stack ptr<StdBuf>, 1
+    store %ts, null
+    %uk:u32 = cast %kind
+    %valid = le %uk, 6
+    branch %valid, ^classify(%end, %slot, %ts), ^invalid()
+^classify(%end:ptr<u64>, %slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %string = eq %kind, 4
+    branch %string, ^string(%slot, %ts), ^number_check(%end, %slot, %ts)
+^string(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %status = call @std_text_validate(%data, %len)
+    %ok = eq %status, 0
+    branch %ok, ^text(%slot, %ts), ^error(%status)
+^number_check(%end:ptr<u64>, %slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %number = eq %kind, 3
+    branch %number, ^number(%end, %slot, %ts), ^empty(%slot, %ts)
+^number(%end:ptr<u64>, %slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %status = call @number_end(%data, %len, 0, %end)
+    %ok = eq %status, 0
+    branch %ok, ^number_complete(%end, %slot, %ts), ^error(%status)
+^number_complete(%end:ptr<u64>, %slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %n = load %end
+    %complete = eq %n, %len
+    branch %complete, ^text(%slot, %ts), ^parse_error()
+^empty(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %empty = eq %len, 0
+    branch %empty, ^budget(%slot, %ts), ^invalid()
+^text(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %status = call @std_bytes_new(%ts)
+    %ok = eq %status, 0
+    branch %ok, ^copy(%slot, %ts), ^error(%status)
+^copy(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %buf = load %ts
+    %status = call @std_bytes_append(%buf, %data, %len)
+    %ok = eq %status, 0
+    branch %ok, ^budget(%slot, %ts), ^cleanup(%ts, %status)
+^budget(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %cp = field %doc, count
+    %count = load %cp
+    %limit = call @std_core_json_nodes()
+    %fits = lt %count, %limit
+    branch %fits, ^allocate(%slot, %ts), ^cleanup(%ts, 9)
+^allocate(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %size = sizeof StdJsonNode
+    %status = call @std_core_allocate(1, %size, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^commit(%slot, %ts), ^cleanup(%ts, %status)
+^commit(%slot:ptr<ptr<void>>, %ts:ptr<ptr<StdBuf>>):
+    %raw = load %slot
+    %node:ptr<StdJsonNode> = cast %raw
+    %text = load %ts
+    %kp = field %node, kind
+    %tp = field %node, text
+    %op = field %node, owner
+    %ap = field %node, allocated
+    %hp = field %doc, head
+    %cp = field %doc, count
+    %head = load %hp
+    %count = load %cp
+    %next = add %count, 1
+    store %kp, %kind
+    store %tp, %text
+    store %op, %doc
+    store %ap, %head
+    store %hp, %node
+    store %cp, %next
+    store %out, %node
+    return 0
+^cleanup(%ts:ptr<ptr<StdBuf>>, %status:i32):
+    %text = load %ts
+    call @std_bytes_destroy(%text)
+    return %status
+^invalid:
+    return 1
+^parse_error:
+    return 6
+^error(%status:i32):
+    return %status
+}
+
+export c fn @std_json_set_root(%doc:ptr<StdJson>, %node:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %null = eq %node, null
+    branch %null, ^invalid(), ^owner()
+^owner:
+    %op = field %node, owner
+    %owner = load %op
+    %same = eq %owner, %doc
+    branch %same, ^parent(), ^invalid()
+^parent:
+    %pp = field %node, parent
+    %parent = load %pp
+    %detached = eq %parent, null
+    branch %detached, ^done(), ^invalid()
+^done:
+    %rp = field %doc, root
+    store %rp, %node
+    return 0
+^invalid:
+    return 1
+}
+
+fn @attach_check(%parent:ptr<StdJsonNode>, %value:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %null = eq %value, null
+    branch %null, ^invalid(), ^owner()
+^owner:
+    %po = field %parent, owner
+    %vo = field %value, owner
+    %a = load %po
+    %b = load %vo
+    %same = eq %a, %b
+    branch %same, ^root(%a), ^invalid()
+^root(%doc:ptr<StdJson>):
+    %root = call @std_json_root(%doc)
+    %isroot = eq %root, %value
+    branch %isroot, ^invalid(), ^parent()
+^parent:
+    %pp = field %value, parent
+    %p = load %pp
+    %detached = eq %p, null
+    branch %detached, ^ancestors(%parent), ^invalid()
+^ancestors(%p:ptr<StdJsonNode>):
+    %end = eq %p, null
+    branch %end, ^done(), ^cycle(%p)
+^cycle(%p:ptr<StdJsonNode>):
+    %same = eq %p, %value
+    branch %same, ^invalid(), ^next(%p)
+^next(%p:ptr<StdJsonNode>):
+    %pp = field %p, parent
+    %next = load %pp
+    jump ^ancestors(%next)
+^done:
+    return 0
+^invalid:
+    return 1
+}
+fn @link_child(%parent:ptr<StdJsonNode>, %value:ptr<StdJsonNode>) -> void {
+^entry:
+    %tp = field %parent, tail
+    %tail = load %tp
+    %empty = eq %tail, null
+    branch %empty, ^first(), ^after(%tail)
+^first:
+    %cp = field %parent, child
+    store %cp, %value
+    jump ^done()
+^after(%tail:ptr<StdJsonNode>):
+    %np = field %tail, next
+    store %np, %value
+    jump ^done()
+^done:
+    %tp = field %parent, tail
+    %pp = field %value, parent
+    %np = field %value, next
+    store %tp, %value
+    store %pp, %parent
+    store %np, null
+    return
+}
+export c fn @std_json_append(%array:ptr<StdJsonNode>, %value:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %kind = call @std_json_kind(%array)
+    %valid = eq %kind, 5
+    branch %valid, ^check(), ^invalid()
+^check:
+    %status = call @attach_check(%array, %value)
+    %ok = eq %status, 0
+    branch %ok, ^done(), ^error(%status)
+^done:
+    call @link_child(%array, %value)
+    return 0
+^invalid:
+    return 1
+^error(%status:i32):
+    return %status
+}
+export c fn @std_json_set(%object:ptr<StdJsonNode>, %key:ptr<u8>, %len:u64, %value:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %ks = stack ptr<StdBuf>, 1
+    %oldslot = stack ptr<StdJsonNode>, 1
+    %kind = call @std_json_kind(%object)
+    %valid = eq %kind, 6
+    branch %valid, ^check(%ks, %oldslot), ^invalid()
+^check(%ks:ptr<ptr<StdBuf>>, %oldslot:ptr<ptr<StdJsonNode>>):
+    %status = call @attach_check(%object, %value)
+    %ok = eq %status, 0
+    branch %ok, ^encoding(%ks, %oldslot), ^error(%status)
+^encoding(%ks:ptr<ptr<StdBuf>>, %oldslot:ptr<ptr<StdJsonNode>>):
+    %status = call @std_text_validate(%key, %len)
+    %ok = eq %status, 0
+    branch %ok, ^buffer(%ks, %oldslot), ^error(%status)
+^buffer(%ks:ptr<ptr<StdBuf>>, %oldslot:ptr<ptr<StdJsonNode>>):
+    %status = call @std_bytes_new(%ks)
+    %ok = eq %status, 0
+    branch %ok, ^copy(%ks, %oldslot), ^error(%status)
+^copy(%ks:ptr<ptr<StdBuf>>, %oldslot:ptr<ptr<StdJsonNode>>):
+    %buf = load %ks
+    %status = call @std_bytes_append(%buf, %key, %len)
+    %ok = eq %status, 0
+    branch %ok, ^lookup(%buf, %oldslot), ^cleanup(%buf, %status)
+^lookup(%buf:ptr<StdBuf>, %oldslot:ptr<ptr<StdJsonNode>>):
+    %status = call @std_json_get(%object, %key, %len, %oldslot)
+    %kp = field %value, key
+    %oldkey = load %kp
+    call @std_bytes_destroy(%oldkey)
+    store %kp, %buf
+    %found = eq %status, 0
+    branch %found, ^replace(%oldslot), ^append()
+^append:
+    call @link_child(%object, %value)
+    return 0
+^replace(%oldslot:ptr<ptr<StdJsonNode>>):
+    %old = load %oldslot
+    %cp = field %object, child
+    jump ^find_link(%old, %cp)
+^find_link(%old:ptr<StdJsonNode>, %link:ptr<ptr<StdJsonNode>>):
+    %current = load %link
+    %same = eq %current, %old
+    branch %same, ^replace_link(%old, %link), ^next_link(%old, %current)
+^next_link(%old:ptr<StdJsonNode>, %current:ptr<StdJsonNode>):
+    %next = field %current, next
+    jump ^find_link(%old, %next)
+^replace_link(%old:ptr<StdJsonNode>, %link:ptr<ptr<StdJsonNode>>):
+    %np = field %old, next
+    %next = load %np
+    %vp = field %value, next
+    %pp = field %value, parent
+    %op = field %old, parent
+    store %vp, %next
+    store %pp, %object
+    store %link, %value
+    store %np, null
+    store %op, null
+    %tp = field %object, tail
+    %tail = load %tp
+    %last = eq %tail, %old
+    branch %last, ^tail(%tp), ^done()
+^tail(%tp:ptr<ptr<StdJsonNode>>):
+    store %tp, %value
+    return 0
+^done:
+    return 0
+^cleanup(%buf:ptr<StdBuf>, %status:i32):
+    call @std_bytes_destroy(%buf)
+    return %status
+^invalid:
+    return 1
+^error(%status:i32):
+    return %status
+}
+
+fn @hex4(%data:ptr<u8>, %len:u64, %start:u64, %out:ptr<u32>) -> i32 {
+^entry:
+    %fits = le %start, %len
+    branch %fits, ^length(), ^invalid()
+^length:
+    %room = sub %len, %start
+    %fits = ge %room, 4
+    branch %fits, ^loop(0, 0), ^invalid()
+^loop(%i:u64, %v:u32):
+    %end = eq %i, 4
+    branch %end, ^done(%v), ^read(%i, %v)
+^read(%i:u64, %v:u32):
+    %at = add %start, %i
+    %idx:i64 = cast %at
+    %p = offset %data, %idx
+    %b = load %p
+    %d = sub %b, 48
+    %digit = lt %d, 10
+    branch %digit, ^step(%i, %v, %d), ^letter(%i, %v, %b)
+^letter(%i:u64, %v:u32, %b:u8):
+    %lower = or %b, 32
+    %d = sub %lower, 97
+    %valid = lt %d, 6
+    %value = add %d, 10
+    branch %valid, ^step(%i, %v, %value), ^invalid()
+^step(%i:u64, %v:u32, %d:u8):
+    %wide:u32 = cast %d
+    %shift = shl %v, 4
+    %next = or %shift, %wide
+    %j = add %i, 1
+    jump ^loop(%j, %next)
+^done(%v:u32):
+    store %out, %v
+    return 0
+^invalid:
+    return 6
+}
+
+fn @encode_scalar(%buf:ptr<StdBuf>, %scalar:u32) -> i32 {
+^entry:
+    %temp = stack u8, 4
+    %ascii = lt %scalar, 128
+    branch %ascii, ^one(%temp), ^two_check(%temp)
+^one(%temp:ptr<u8>):
+    %b:u8 = cast %scalar
+    store %temp, %b
+    jump ^append(%temp, 1)
+^two_check(%temp:ptr<u8>):
+    %two = lt %scalar, 2048
+    branch %two, ^head(%temp, 2, 6, 192), ^three_check(%temp)
+^three_check(%temp:ptr<u8>):
+    %three = lt %scalar, 65536
+    branch %three, ^head(%temp, 3, 12, 224), ^head(%temp, 4, 18, 240)
+^head(%temp:ptr<u8>, %n:u64, %shift:u32, %prefix:u32):
+    %bits = shr %scalar, %shift
+    %head = or %bits, %prefix
+    %b:u8 = cast %head
+    store %temp, %b
+    jump ^tail(%temp, %n, 1, %shift)
+^tail(%temp:ptr<u8>, %n:u64, %i:u64, %shift:u32):
+    %done = eq %i, %n
+    branch %done, ^append(%temp, %n), ^byte(%temp, %n, %i, %shift)
+^byte(%temp:ptr<u8>, %n:u64, %i:u64, %shift:u32):
+    %nextshift = sub %shift, 6
+    %bits = shr %scalar, %nextshift
+    %low = and %bits, 63
+    %value = or %low, 128
+    %b:u8 = cast %value
+    %idx:i64 = cast %i
+    %p = offset %temp, %idx
+    store %p, %b
+    %j = add %i, 1
+    jump ^tail(%temp, %n, %j, %nextshift)
+^append(%temp:ptr<u8>, %n:u64):
+    %status = call @std_bytes_append(%buf, %temp, %n)
+    return %status
+}
+
+fn @decode_string(%data:ptr<u8>, %len:u64, %index:ptr<u64>, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %code = stack u32, 1
+    %low = stack u32, 1
+    %status = call @std_bytes_new(%slot)
+    %ok = eq %status, 0
+    branch %ok, ^start(%slot, %code, %low), ^error(%status)
+^start(%slot:ptr<ptr<StdBuf>>, %code:ptr<u32>, %low:ptr<u32>):
+    %buf = load %slot
+    %at = load %index
+    %i = add %at, 1
+    jump ^loop(%buf, %code, %low, %i)
+^loop(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64):
+    %end = ge %i, %len
+    branch %end, ^cleanup(%buf, 6), ^read(%buf, %code, %low, %i)
+^read(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %quote = eq %b, 34
+    %next = add %i, 1
+    branch %quote, ^done(%buf, %next), ^control(%buf, %code, %low, %next, %b)
+^control(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %invalid = lt %b, 32
+    branch %invalid, ^cleanup(%buf, 6), ^slash(%buf, %code, %low, %next, %b)
+^slash(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %escape = eq %b, 92
+    branch %escape, ^escape(%buf, %code, %low, %next), ^push(%buf, %code, %low, %next, %b)
+^escape(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64):
+    %end = ge %i, %len
+    branch %end, ^cleanup(%buf, 6), ^escaped(%buf, %code, %low, %i)
+^escaped(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %next = add %i, 1
+    %unicode = eq %b, 117
+    branch %unicode, ^unicode(%buf, %code, %low, %next), ^quote_escape(%buf, %code, %low, %next, %b)
+^quote_escape(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 34
+    branch %match, ^push(%buf, %code, %low, %next, %b), ^slash_escape(%buf, %code, %low, %next, %b)
+^slash_escape(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 92
+    branch %match, ^push(%buf, %code, %low, %next, %b), ^solidus(%buf, %code, %low, %next, %b)
+^solidus(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 47
+    branch %match, ^push(%buf, %code, %low, %next, %b), ^backspace(%buf, %code, %low, %next, %b)
+^backspace(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 98
+    branch %match, ^push(%buf, %code, %low, %next, 8), ^formfeed(%buf, %code, %low, %next, %b)
+^formfeed(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 102
+    branch %match, ^push(%buf, %code, %low, %next, 12), ^newline(%buf, %code, %low, %next, %b)
+^newline(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 110
+    branch %match, ^push(%buf, %code, %low, %next, 10), ^carriage(%buf, %code, %low, %next, %b)
+^carriage(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 114
+    branch %match, ^push(%buf, %code, %low, %next, 13), ^tab(%buf, %code, %low, %next, %b)
+^tab(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %match = eq %b, 116
+    branch %match, ^push(%buf, %code, %low, %next, 9), ^cleanup(%buf, 6)
+^unicode(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64):
+    %status = call @hex4(%data, %len, %i, %code)
+    %ok = eq %status, 0
+    %next = add %i, 4
+    branch %ok, ^scalar(%buf, %code, %low, %next), ^cleanup(%buf, %status)
+^scalar(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64):
+    %v = load %code
+    %delta = sub %v, 55296
+    %high = lt %delta, 1024
+    branch %high, ^pair_length(%buf, %code, %low, %next, %v), ^not_low(%buf, %code, %low, %next, %v)
+^not_low(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %v:u32):
+    %delta = sub %v, 56320
+    %bad = lt %delta, 1024
+    branch %bad, ^cleanup(%buf, 5), ^encode(%buf, %code, %low, %next, %v)
+^pair_length(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64, %high:u32):
+    %remaining = sub %len, %i
+    %fits = ge %remaining, 6
+    branch %fits, ^pair_slash(%buf, %code, %low, %i, %high), ^cleanup(%buf, 5)
+^pair_slash(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64, %high:u32):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %slash = eq %b, 92
+    branch %slash, ^pair_u(%buf, %code, %low, %i, %high, %p), ^cleanup(%buf, 5)
+^pair_u(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64, %high:u32, %p:ptr<u8>):
+    %q = offset %p, 1
+    %b = load %q
+    %u = eq %b, 117
+    branch %u, ^pair_hex(%buf, %code, %low, %i, %high), ^cleanup(%buf, 5)
+^pair_hex(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64, %high:u32):
+    %start = add %i, 2
+    %status = call @hex4(%data, %len, %start, %low)
+    %ok = eq %status, 0
+    branch %ok, ^pair_value(%buf, %code, %low, %i, %high), ^cleanup(%buf, %status)
+^pair_value(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %i:u64, %high:u32):
+    %v = load %low
+    %delta = sub %v, 56320
+    %valid = lt %delta, 1024
+    %upper = sub %high, 55296
+    %shift = shl %upper, 10
+    %bits = or %shift, %delta
+    %scalar = add %bits, 65536
+    %next = add %i, 6
+    branch %valid, ^encode(%buf, %code, %low, %next, %scalar), ^cleanup(%buf, 5)
+^encode(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %v:u32):
+    %status = call @encode_scalar(%buf, %v)
+    %ok = eq %status, 0
+    branch %ok, ^loop(%buf, %code, %low, %next), ^cleanup(%buf, %status)
+^push(%buf:ptr<StdBuf>, %code:ptr<u32>, %low:ptr<u32>, %next:u64, %b:u8):
+    %status = call @std_bytes_push(%buf, %b)
+    %ok = eq %status, 0
+    branch %ok, ^loop(%buf, %code, %low, %next), ^cleanup(%buf, %status)
+^done(%buf:ptr<StdBuf>, %next:u64):
+    store %out, %buf
+    store %index, %next
+    return 0
+^cleanup(%buf:ptr<StdBuf>, %status:i32):
+    call @std_bytes_destroy(%buf)
+    return %status
+^error(%status:i32):
+    return %status
+}
+
+fn @peek(%parser:ptr<JsonParser>) -> i32 {
+^entry:
+    %ip = field %parser, index
+    %lp = field %parser, len
+    %i = load %ip
+    %n = load %lp
+    %end = ge %i, %n
+    branch %end, ^eof(), ^read(%i)
+^read(%i:u64):
+    %dp = field %parser, data
+    %data = load %dp
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %wide:i32 = cast %b
+    return %wide
+^eof:
+    return -1
+}
+fn @bump(%parser:ptr<JsonParser>) -> void {
+^entry:
+    %ip = field %parser, index
+    %i = load %ip
+    %next = add %i, 1
+    store %ip, %next
+    return
+}
+fn @parser_state(%parser:ptr<JsonParser>, %state:i32) -> void {
+^entry:
+    %sp = field %parser, state
+    store %sp, %state
+    return
+}
+
+# Attach one parsed value, then transition to the new container or its parent's
+# separator state. Object keys are consumed only after a successful attachment.
+fn @parsed_node(%parser:ptr<JsonParser>, %node:ptr<StdJsonNode>) -> i32 {
+^entry:
+    %existing = stack ptr<StdJsonNode>, 1
+    %cp = field %parser, current
+    %parent = load %cp
+    %root = eq %parent, null
+    branch %root, ^root(), ^container(%existing, %parent)
+^root:
+    %dp = field %parser, doc
+    %doc = load %dp
+    %status = call @std_json_set_root(%doc, %node)
+    jump ^status(%status)
+^container(%existing:ptr<ptr<StdJsonNode>>, %parent:ptr<StdJsonNode>):
+    %kind = call @std_json_kind(%parent)
+    %array = eq %kind, 5
+    branch %array, ^array(%parent), ^object(%existing, %parent)
+^array(%parent:ptr<StdJsonNode>):
+    %status = call @std_json_append(%parent, %node)
+    jump ^status(%status)
+^object(%existing:ptr<ptr<StdJsonNode>>, %parent:ptr<StdJsonNode>):
+    %kp = field %parser, key
+    %key = load %kp
+    %dp = field %key, data
+    %lp = field %key, len
+    %data = load %dp
+    %len = load %lp
+    %found = call @std_json_get(%parent, %data, %len, %existing)
+    %duplicate = eq %found, 0
+    branch %duplicate, ^error(6), ^set(%parent, %key, %data, %len)
+^set(%parent:ptr<StdJsonNode>, %key:ptr<StdBuf>, %data:ptr<u8>, %len:u64):
+    %status = call @std_json_set(%parent, %data, %len, %node)
+    call @std_bytes_destroy(%key)
+    %kp = field %parser, key
+    store %kp, null
+    jump ^status(%status)
+^status(%status:i32):
+    %ok = eq %status, 0
+    branch %ok, ^kind(), ^error(%status)
+^kind:
+    %kind = call @std_json_kind(%node)
+    %container = ge %kind, 5
+    branch %container, ^depth(%kind), ^primitive()
+^depth(%kind:i32):
+    %dp = field %parser, depth
+    %lp = field %parser, limit
+    %depth = load %dp
+    %limit = load %lp
+    %fits = lt %depth, %limit
+    branch %fits, ^enter(%kind, %depth), ^error(9)
+^enter(%kind:i32, %depth:u64):
+    %next = add %depth, 1
+    %dp = field %parser, depth
+    %cp = field %parser, current
+    store %dp, %next
+    store %cp, %node
+    %array = eq %kind, 5
+    branch %array, ^state(1), ^state(3)
+^primitive:
+    %cp = field %parser, current
+    %parent = load %cp
+    %root = eq %parent, null
+    branch %root, ^state(9), ^state(2)
+^state(%state:i32):
+    call @parser_state(%parser, %state)
+    return 0
+^error(%status:i32):
+    return %status
+}
+
+data @json_null = "null"
+data @json_false = "false"
+data @json_true = "true"
+
+fn @parse_value(%parser:ptr<JsonParser>) -> i32 {
+^entry:
+    %slot = stack ptr<StdJsonNode>, 1
+    %bufslot = stack ptr<StdBuf>, 1
+    %end = stack u64, 1
+    %dp = field %parser, doc
+    %doc = load %dp
+    %b = call @peek(%parser)
+    %array = eq %b, 91
+    branch %array, ^container(%slot, %doc, 5), ^object(%slot, %bufslot, %end, %doc, %b)
+^object(%slot:ptr<ptr<StdJsonNode>>, %bufslot:ptr<ptr<StdBuf>>, %end:ptr<u64>, %doc:ptr<StdJson>, %b:i32):
+    %object = eq %b, 123
+    branch %object, ^container(%slot, %doc, 6), ^string_check(%slot, %bufslot, %end, %doc, %b)
+^container(%slot:ptr<ptr<StdJsonNode>>, %doc:ptr<StdJson>, %kind:i32):
+    %status = call @std_json_create(%doc, %kind, null, 0, %slot)
+    call @bump(%parser)
+    jump ^status(%slot, %status)
+^string_check(%slot:ptr<ptr<StdJsonNode>>, %bufslot:ptr<ptr<StdBuf>>, %end:ptr<u64>, %doc:ptr<StdJson>, %b:i32):
+    %dp = field %parser, data
+    %lp = field %parser, len
+    %ip = field %parser, index
+    %data = load %dp
+    %len = load %lp
+    %quote = eq %b, 34
+    branch %quote, ^string(%slot, %bufslot, %doc, %data, %len, %ip), ^null_check(%slot, %end, %doc, %data, %len, %ip, %b)
+^string(%slot:ptr<ptr<StdJsonNode>>, %bufslot:ptr<ptr<StdBuf>>, %doc:ptr<StdJson>, %data:ptr<u8>, %len:u64, %ip:ptr<u64>):
+    %status = call @decode_string(%data, %len, %ip, %bufslot)
+    %ok = eq %status, 0
+    branch %ok, ^string_node(%slot, %bufslot, %doc), ^error(%status)
+^string_node(%slot:ptr<ptr<StdJsonNode>>, %bufslot:ptr<ptr<StdBuf>>, %doc:ptr<StdJson>):
+    %buf = load %bufslot
+    %dp = field %buf, data
+    %lp = field %buf, len
+    %data = load %dp
+    %len = load %lp
+    %status = call @std_json_create(%doc, 4, %data, %len, %slot)
+    call @std_bytes_destroy(%buf)
+    jump ^status(%slot, %status)
+^null_check(%slot:ptr<ptr<StdJsonNode>>, %end:ptr<u64>, %doc:ptr<StdJson>, %data:ptr<u8>, %len:u64, %ip:ptr<u64>, %b:i32):
+    %null = eq %b, 110
+    %word = address @json_null
+    branch %null, ^literal(%slot, %doc, %data, %len, %ip, %word, 4, 0), ^false_check(%slot, %end, %doc, %data, %len, %ip, %b)
+^false_check(%slot:ptr<ptr<StdJsonNode>>, %end:ptr<u64>, %doc:ptr<StdJson>, %data:ptr<u8>, %len:u64, %ip:ptr<u64>, %b:i32):
+    %false = eq %b, 102
+    %word = address @json_false
+    branch %false, ^literal(%slot, %doc, %data, %len, %ip, %word, 5, 1), ^true_check(%slot, %end, %doc, %data, %len, %ip, %b)
+^true_check(%slot:ptr<ptr<StdJsonNode>>, %end:ptr<u64>, %doc:ptr<StdJson>, %data:ptr<u8>, %len:u64, %ip:ptr<u64>, %b:i32):
+    %true = eq %b, 116
+    %word = address @json_true
+    branch %true, ^literal(%slot, %doc, %data, %len, %ip, %word, 4, 2), ^number(%slot, %end, %doc, %data, %len, %ip)
+^literal(%slot:ptr<ptr<StdJsonNode>>, %doc:ptr<StdJson>, %data:ptr<u8>, %len:u64, %ip:ptr<u64>, %word:ptr<u8>, %size:u64, %kind:i32):
+    %i = load %ip
+    %room = sub %len, %i
+    %fits = ge %room, %size
+    branch %fits, ^word(%slot, %doc, %data, %ip, %word, %size, %kind, %i), ^error(6)
+^word(%slot:ptr<ptr<StdJsonNode>>, %doc:ptr<StdJson>, %data:ptr<u8>, %ip:ptr<u64>, %word:ptr<u8>, %size:u64, %kind:i32, %i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %cmp = call @std_bytes_compare(%p, %size, %word, %size)
+    %same = eq %cmp, 0
+    branch %same, ^literal_node(%slot, %doc, %ip, %size, %kind, %i), ^error(6)
+^literal_node(%slot:ptr<ptr<StdJsonNode>>, %doc:ptr<StdJson>, %ip:ptr<u64>, %size:u64, %kind:i32, %i:u64):
+    %next = add %i, %size
+    store %ip, %next
+    %status = call @std_json_create(%doc, %kind, null, 0, %slot)
+    jump ^status(%slot, %status)
+^number(%slot:ptr<ptr<StdJsonNode>>, %end:ptr<u64>, %doc:ptr<StdJson>, %data:ptr<u8>, %len:u64, %ip:ptr<u64>):
+    %i = load %ip
+    %status = call @number_end(%data, %len, %i, %end)
+    %ok = eq %status, 0
+    branch %ok, ^number_node(%slot, %end, %doc, %data, %ip, %i), ^error(%status)
+^number_node(%slot:ptr<ptr<StdJsonNode>>, %end:ptr<u64>, %doc:ptr<StdJson>, %data:ptr<u8>, %ip:ptr<u64>, %i:u64):
+    %next = load %end
+    %size = sub %next, %i
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    store %ip, %next
+    %status = call @std_json_create(%doc, 3, %p, %size, %slot)
+    jump ^status(%slot, %status)
+^status(%slot:ptr<ptr<StdJsonNode>>, %status:i32):
+    %ok = eq %status, 0
+    branch %ok, ^attach(%slot), ^error(%status)
+^attach(%slot:ptr<ptr<StdJsonNode>>):
+    %node = load %slot
+    %status = call @parsed_node(%parser, %node)
+    return %status
+^error(%status:i32):
+    return %status
+}
+
+export c fn @std_json_parse(%data:ptr<u8>, %len:u64, %depth:u64, %out:ptr<ptr<StdJson>>) -> i32 {
+^entry:
+    %parser = stack JsonParser, 1
+    %status = call @std_text_validate(%data, %len)
+    %ok = eq %status, 0
+    branch %ok, ^new(%parser), ^error(%status)
+^new(%parser:ptr<JsonParser>):
+    %dp = field %parser, doc
+    %status = call @std_json_new(%dp)
+    %ok = eq %status, 0
+    branch %ok, ^limit(%parser), ^error(%status)
+^limit(%parser:ptr<JsonParser>):
+    %zero = eq %depth, 0
+    branch %zero, ^default(%parser), ^initialize(%parser, %depth)
+^default(%parser:ptr<JsonParser>):
+    %limit = call @std_core_json_depth()
+    jump ^initialize(%parser, %limit)
+^initialize(%parser:ptr<JsonParser>, %limit:u64):
+    %dp = field %parser, data
+    %lp = field %parser, len
+    %ip = field %parser, index
+    %cp = field %parser, current
+    %kp = field %parser, key
+    %depthp = field %parser, depth
+    %limitp = field %parser, limit
+    store %dp, %data
+    store %lp, %len
+    store %ip, 0
+    store %cp, null
+    store %kp, null
+    store %depthp, 0
+    store %limitp, %limit
+    call @parser_state(%parser, 0)
+    jump ^loop(%parser)
+^loop(%parser:ptr<JsonParser>):
+    %b = call @peek(%parser)
+    %space = eq %b, 32
+    branch %space, ^space(%parser), ^whitespace(%parser, %b)
+^whitespace(%parser:ptr<JsonParser>, %b:i32):
+    %tab = eq %b, 9
+    branch %tab, ^space(%parser), ^newline(%parser, %b)
+^newline(%parser:ptr<JsonParser>, %b:i32):
+    %lf = eq %b, 10
+    branch %lf, ^space(%parser), ^carriage(%parser, %b)
+^carriage(%parser:ptr<JsonParser>, %b:i32):
+    %cr = eq %b, 13
+    branch %cr, ^space(%parser), ^dispatch(%parser, %b)
+^space(%parser:ptr<JsonParser>):
+    call @bump(%parser)
+    jump ^loop(%parser)
+^dispatch(%parser:ptr<JsonParser>, %b:i32):
+    %sp = field %parser, state
+    %state = load %sp
+    %done = eq %state, 9
+    branch %done, ^finish(%parser, %b), ^value_check(%parser, %b, %state)
+^value_check(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %value = eq %state, 0
+    branch %value, ^value(%parser), ^array_required(%parser, %b, %state)
+^array_required(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %required = eq %state, 8
+    branch %required, ^value(%parser), ^array_first(%parser, %b, %state)
+^array_first(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %first = eq %state, 1
+    branch %first, ^array_end(%parser, %b), ^object_first(%parser, %b, %state)
+^array_end(%parser:ptr<JsonParser>, %b:i32):
+    %end = eq %b, 93
+    branch %end, ^close(%parser), ^value(%parser)
+^object_first(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %first = eq %state, 3
+    branch %first, ^object_end(%parser, %b), ^key_required(%parser, %b, %state)
+^object_end(%parser:ptr<JsonParser>, %b:i32):
+    %end = eq %b, 125
+    branch %end, ^close(%parser), ^key(%parser, %b)
+^key_required(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %required = eq %state, 7
+    branch %required, ^key(%parser, %b), ^colon_check(%parser, %b, %state)
+^colon_check(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %colon = eq %state, 4
+    branch %colon, ^colon(%parser, %b), ^separator(%parser, %b)
+^colon(%parser:ptr<JsonParser>, %b:i32):
+    %colon = eq %b, 58
+    branch %colon, ^transition(%parser, 0), ^cleanup(%parser, 6)
+^separator(%parser:ptr<JsonParser>, %b:i32):
+    %cp = field %parser, current
+    %parent = load %cp
+    %kind = call @std_json_kind(%parent)
+    %array = eq %kind, 5
+    branch %array, ^array_separator(%parser, %b), ^object_separator(%parser, %b)
+^array_separator(%parser:ptr<JsonParser>, %b:i32):
+    %end = eq %b, 93
+    branch %end, ^close(%parser), ^comma(%parser, %b, 8)
+^object_separator(%parser:ptr<JsonParser>, %b:i32):
+    %end = eq %b, 125
+    branch %end, ^close(%parser), ^comma(%parser, %b, 7)
+^comma(%parser:ptr<JsonParser>, %b:i32, %state:i32):
+    %comma = eq %b, 44
+    branch %comma, ^transition(%parser, %state), ^cleanup(%parser, 6)
+^transition(%parser:ptr<JsonParser>, %state:i32):
+    call @bump(%parser)
+    call @parser_state(%parser, %state)
+    jump ^loop(%parser)
+^key(%parser:ptr<JsonParser>, %b:i32):
+    %quote = eq %b, 34
+    branch %quote, ^decode_key(%parser), ^cleanup(%parser, 6)
+^decode_key(%parser:ptr<JsonParser>):
+    %ip = field %parser, index
+    %kp = field %parser, key
+    %status = call @decode_string(%data, %len, %ip, %kp)
+    %ok = eq %status, 0
+    branch %ok, ^key_done(%parser), ^cleanup(%parser, %status)
+^key_done(%parser:ptr<JsonParser>):
+    call @parser_state(%parser, 4)
+    jump ^loop(%parser)
+^value(%parser:ptr<JsonParser>):
+    %status = call @parse_value(%parser)
+    %ok = eq %status, 0
+    branch %ok, ^loop(%parser), ^cleanup(%parser, %status)
+^close(%parser:ptr<JsonParser>):
+    %cp = field %parser, current
+    %current = load %cp
+    %pp = field %current, parent
+    %parent = load %pp
+    store %cp, %parent
+    %dp = field %parser, depth
+    %d = load %dp
+    %next = sub %d, 1
+    store %dp, %next
+    %root = eq %parent, null
+    branch %root, ^transition(%parser, 9), ^transition(%parser, 2)
+^finish(%parser:ptr<JsonParser>, %b:i32):
+    %eof = eq %b, -1
+    branch %eof, ^done(%parser), ^cleanup(%parser, 6)
+^done(%parser:ptr<JsonParser>):
+    %dp = field %parser, doc
+    %doc = load %dp
+    store %out, %doc
+    return 0
+^cleanup(%parser:ptr<JsonParser>, %status:i32):
+    %kp = field %parser, key
+    %dp = field %parser, doc
+    %key = load %kp
+    %doc = load %dp
+    call @std_bytes_destroy(%key)
+    call @std_json_destroy(%doc)
+    return %status
+^error(%status:i32):
+    return %status
+}
+
+fn @write_bytes(%buf:ptr<StdBuf>, %limit:u64, %data:ptr<u8>, %len:u64) -> i32 {
+^entry:
+    %lp = field %buf, len
+    %used = load %lp
+    %room = sub %limit, %used
+    %fits = le %len, %room
+    branch %fits, ^write(), ^limit()
+^write:
+    %status = call @std_bytes_append(%buf, %data, %len)
+    return %status
+^limit:
+    return 9
+}
+fn @write_byte(%buf:ptr<StdBuf>, %limit:u64, %byte:u8) -> i32 {
+^entry:
+    %slot = stack u8, 1
+    store %slot, %byte
+    %status = call @write_bytes(%buf, %limit, %slot, 1)
+    return %status
+}
+data @hex_digits = "0123456789abcdef"
+fn @write_string(%buf:ptr<StdBuf>, %limit:u64, %text:ptr<StdBuf>) -> i32 {
+^entry:
+    %escape = stack u8, 6
+    %status = call @write_byte(%buf, %limit, 34)
+    %ok = eq %status, 0
+    branch %ok, ^start(%escape), ^error(%status)
+^start(%escape:ptr<u8>):
+    %dp = field %text, data
+    %lp = field %text, len
+    %data = load %dp
+    %len = load %lp
+    jump ^loop(%escape, %data, %len, 0)
+^loop(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64):
+    %end = eq %i, %len
+    branch %end, ^done(), ^read(%escape, %data, %len, %i)
+^read(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %control = lt %b, 32
+    branch %control, ^control(%escape, %data, %len, %i, %b), ^quote(%escape, %data, %len, %i, %b)
+^quote(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %b:u8):
+    %quote = eq %b, 34
+    branch %quote, ^escaped(%escape, %data, %len, %i, %b), ^slash(%escape, %data, %len, %i, %b)
+^slash(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %b:u8):
+    %slash = eq %b, 92
+    branch %slash, ^escaped(%escape, %data, %len, %i, %b), ^plain(%escape, %data, %len, %i, %b)
+^escaped(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %b:u8):
+    store %escape, 92
+    %p = offset %escape, 1
+    store %p, %b
+    jump ^append(%escape, %data, %len, %i, 2)
+^control(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %b:u8):
+    store %escape, 92
+    %p1 = offset %escape, 1
+    %p2 = offset %escape, 2
+    %p3 = offset %escape, 3
+    %p4 = offset %escape, 4
+    %p5 = offset %escape, 5
+    store %p1, 117
+    store %p2, 48
+    store %p3, 48
+    %hi = shr %b, 4
+    %lo = and %b, 15
+    %high:i64 = cast %hi
+    %low:i64 = cast %lo
+    %digits = address @hex_digits
+    %hp = offset %digits, %high
+    %lp = offset %digits, %low
+    %h = load %hp
+    %l = load %lp
+    store %p4, %h
+    store %p5, %l
+    jump ^append(%escape, %data, %len, %i, 6)
+^append(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %size:u64):
+    %status = call @write_bytes(%buf, %limit, %escape, %size)
+    jump ^next(%escape, %data, %len, %i, %status)
+^plain(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %b:u8):
+    %status = call @write_byte(%buf, %limit, %b)
+    jump ^next(%escape, %data, %len, %i, %status)
+^next(%escape:ptr<u8>, %data:ptr<u8>, %len:u64, %i:u64, %status:i32):
+    %ok = eq %status, 0
+    %next = add %i, 1
+    branch %ok, ^loop(%escape, %data, %len, %next), ^error(%status)
+^done:
+    %status = call @write_byte(%buf, %limit, 34)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @write_primitive(%buf:ptr<StdBuf>, %limit:u64, %node:ptr<StdJsonNode>, %kind:i32) -> i32 {
+^entry:
+    %string = eq %kind, 4
+    branch %string, ^string(), ^number_check()
+^string:
+    %tp = field %node, text
+    %text = load %tp
+    %status = call @write_string(%buf, %limit, %text)
+    return %status
+^number_check:
+    %number = eq %kind, 3
+    branch %number, ^number(), ^null_check()
+^number:
+    %tp = field %node, text
+    %text = load %tp
+    %dp = field %text, data
+    %lp = field %text, len
+    %data = load %dp
+    %len = load %lp
+    jump ^write(%data, %len)
+^null_check:
+    %null = eq %kind, 0
+    %data = address @json_null
+    branch %null, ^write(%data, 4), ^false_check()
+^false_check:
+    %false = eq %kind, 1
+    %data = address @json_false
+    branch %false, ^write(%data, 5), ^true()
+^true:
+    %data = address @json_true
+    jump ^write(%data, 4)
+^write(%data:ptr<u8>, %len:u64):
+    %status = call @write_bytes(%buf, %limit, %data, %len)
+    return %status
+}
+
+export c fn @std_json_stringify(%doc:ptr<StdJson>, %depth:u64, %limit:u64, %out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot = stack ptr<StdBuf>, 1
+    %root = call @std_json_root(%doc)
+    %empty = eq %root, null
+    branch %empty, ^error(1), ^new(%slot, %root)
+^new(%slot:ptr<ptr<StdBuf>>, %root:ptr<StdJsonNode>):
+    %status = call @std_bytes_new(%slot)
+    %ok = eq %status, 0
+    branch %ok, ^limit(%slot, %root), ^error(%status)
+^limit(%slot:ptr<ptr<StdBuf>>, %root:ptr<StdJsonNode>):
+    %buf = load %slot
+    %default = eq %depth, 0
+    branch %default, ^default(%buf, %root), ^prefix(%buf, %root, 0, %depth)
+^default(%buf:ptr<StdBuf>, %root:ptr<StdJsonNode>):
+    %max = call @std_core_json_depth()
+    jump ^prefix(%buf, %root, 0, %max)
+^prefix(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %pp = field %node, parent
+    %parent = load %pp
+    %root = eq %parent, null
+    branch %root, ^visit(%buf, %node, %d, %max), ^parent_kind(%buf, %node, %d, %max, %parent)
+^parent_kind(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %parent:ptr<StdJsonNode>):
+    %kind = call @std_json_kind(%parent)
+    %object = eq %kind, 6
+    branch %object, ^key(%buf, %node, %d, %max), ^visit(%buf, %node, %d, %max)
+^key(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %kp = field %node, key
+    %key = load %kp
+    %status = call @write_string(%buf, %limit, %key)
+    %ok = eq %status, 0
+    branch %ok, ^colon(%buf, %node, %d, %max), ^cleanup(%buf, %status)
+^colon(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %status = call @write_byte(%buf, %limit, 58)
+    %ok = eq %status, 0
+    branch %ok, ^visit(%buf, %node, %d, %max), ^cleanup(%buf, %status)
+^visit(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %kind = call @std_json_kind(%node)
+    %container = ge %kind, 5
+    branch %container, ^depth(%buf, %node, %d, %max, %kind), ^primitive(%buf, %node, %d, %max, %kind)
+^primitive(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %kind:i32):
+    %status = call @write_primitive(%buf, %limit, %node, %kind)
+    %ok = eq %status, 0
+    branch %ok, ^advance(%buf, %node, %d, %max), ^cleanup(%buf, %status)
+^depth(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %kind:i32):
+    %fits = lt %d, %max
+    branch %fits, ^open_kind(%buf, %node, %d, %max, %kind), ^cleanup(%buf, 9)
+^open_kind(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %kind:i32):
+    %array = eq %kind, 5
+    branch %array, ^open(%buf, %node, %d, %max, 91), ^open(%buf, %node, %d, %max, 123)
+^open(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %byte:u8):
+    %status = call @write_byte(%buf, %limit, %byte)
+    %ok = eq %status, 0
+    branch %ok, ^children(%buf, %node, %d, %max), ^cleanup(%buf, %status)
+^children(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %cp = field %node, child
+    %child = load %cp
+    %empty = eq %child, null
+    %nextdepth = add %d, 1
+    branch %empty, ^close(%buf, %node, %nextdepth, %max), ^prefix(%buf, %child, %nextdepth, %max)
+^advance(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %np = field %node, next
+    %next = load %np
+    %end = eq %next, null
+    branch %end, ^ascend(%buf, %node, %d, %max), ^comma(%buf, %next, %d, %max)
+^comma(%buf:ptr<StdBuf>, %next:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %status = call @write_byte(%buf, %limit, 44)
+    %ok = eq %status, 0
+    branch %ok, ^prefix(%buf, %next, %d, %max), ^cleanup(%buf, %status)
+^ascend(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %pp = field %node, parent
+    %parent = load %pp
+    %root = eq %parent, null
+    branch %root, ^done(%buf), ^close(%buf, %parent, %d, %max)
+^close(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64):
+    %kind = call @std_json_kind(%node)
+    %array = eq %kind, 5
+    branch %array, ^closing(%buf, %node, %d, %max, 93), ^closing(%buf, %node, %d, %max, 125)
+^closing(%buf:ptr<StdBuf>, %node:ptr<StdJsonNode>, %d:u64, %max:u64, %byte:u8):
+    %status = call @write_byte(%buf, %limit, %byte)
+    %ok = eq %status, 0
+    %parentdepth = sub %d, 1
+    branch %ok, ^advance(%buf, %node, %parentdepth, %max), ^cleanup(%buf, %status)
+^done(%buf:ptr<StdBuf>):
+    store %out, %buf
+    return 0
+^cleanup(%buf:ptr<StdBuf>, %status:i32):
+    call @std_bytes_destroy(%buf)
+    return %status
+^error(%status:i32):
+    return %status
+}

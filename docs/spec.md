@@ -223,8 +223,26 @@ interface. Imports resolve at link time. ABI signatures are the programmer's
 responsibility. All object pointers use the target's `void *` representation.
 Signedness/width, return types, and actual foreign function conventions must match.
 
-There is no language-level module linker or cross-object type checking. Multiple
-objects can communicate through C exports/imports. Variadic functions, function
+Version 2 accepts `use std_MODULE` declarations. The compiler's bundled catalogue
+supplies that module's exact foreign signatures, shared types, and transitive
+dependencies. Imports are order independent and repeated imports are idempotent.
+Unknown modules report `E_LIBRARY`; user declarations conflicting with imported
+types/functions report `E_DUPLICATE`. Imports are declarations, not textual
+inclusion, and do not add initialization effects. There are no wildcard imports,
+aliases, arbitrary paths, or third-party dependency resolution. Version 1 does
+not accept `use`. See the [standard library](libraries.md).
+
+The compiler verifies calls against imported signatures. Library builds also
+verify LM0 exports against the same catalogue, and C adapters include its generated
+header. Executables/shared libraries automatically link the standard archive and
+libm when a standard module is imported. A catalogue-specific symbol binds each
+importing object to the matching archive; `--kind object` and `emit-asm` report
+their `link_requirements` for a downstream linker. Library declarations retain
+the original import's diagnostic span and cannot be selected for source replacement.
+
+There is no general-purpose module linker or cross-object type checking for
+arbitrary C declarations. Multiple objects can communicate through C exports/imports.
+Variadic functions, function
 pointers, callbacks, and aggregate-by-value signatures are not supported.
 
 `lm0 build --kind shared` produces a position-independent shared library without

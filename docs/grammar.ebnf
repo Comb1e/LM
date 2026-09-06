@@ -1,7 +1,8 @@
 (* Lexical whitespace excludes newline. # comments extend to newline. *)
 module       = lines, "module", name, "version", integer, endline,
                { declaration }, EOF ;
-declaration  = function | foreign | structure | data ;
+declaration  = function | foreign | structure | data | library ;
+library      = "use", name, endline ; (* Version 2, bundled standard modules only. *)
 function     = [ "export", "c" ], "fn", symbol, params, "->", type,
                "{", endline, { block }, "}", endline ;
 foreign      = "extern", "c", "fn", symbol, params, "->", type, endline ;

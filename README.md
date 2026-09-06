@@ -15,7 +15,8 @@ source character counts alone do not establish an LLM advantage.
 
 ## Build and Run
 
-The compiler requires x86-64 Linux, glibc, GNU make, GCC, and binutils. Python is
+The compiler requires x86-64 Linux, glibc, GNU make, GCC, binutils, and the `json-c`
+development package for the C catalogue generator. Python is
 not used to build or run the compiler and is not part of LM0 compilation.
 
 ```sh
@@ -39,7 +40,7 @@ sudo make install
 lm0 run examples/linked_list.lm0
 ```
 
-Version 0.3 supports `-O0`. Higher optimization levels and `--sanitize` are
+Version 0.4 supports `-O0`. Higher optimization levels and `--sanitize` are
 rejected with `E_UNSUPPORTED`; native optimization and sanitizer instrumentation
 remain future backend work.
 
@@ -74,6 +75,27 @@ fn @main() -> i32 {
 
 Read the [language specification](docs/spec.md), [grammar](docs/grammar.ebnf),
 [instruction table](docs/instructions.md), and [LLM instruction sheet](docs/llm.md).
+
+## Standard Library
+
+Ten bundled modules provide bytes/buffers, UTF-8 text, i64 vectors, byte-key maps,
+JSON, checked arithmetic/libm, deterministic random numbers, file I/O, time, and
+shared allocation/status conventions. Algorithms are written in LM0 v2; C handles
+allocation and platform services. Add `use std_MODULE` to get exact signatures and
+automatic linking, then retrieve only the contracts needed for the current task:
+
+```sh
+build/lm0 library list
+build/lm0 library describe std_vec std_vec_push std_vec_get
+build/lm0 run examples/stdlib/word_count.lm0
+build/lm0 run examples/stdlib/json_transform.lm0
+build/lm0 run examples/stdlib/statistics.lm0
+make test-stdlib
+```
+
+The examples use local fixtures; the transformer writes `build/stdlib-transformed.json`.
+See the [library guide](docs/libraries.md), [examples](examples/stdlib/README.md),
+and [measurements and application report](docs/experience/libraries.md).
 
 ## Play Snake
 

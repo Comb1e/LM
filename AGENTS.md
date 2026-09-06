@@ -22,6 +22,20 @@ comparisons. New compiler/evaluation code must use assembly or C, without Python
 For offline comparisons use `make eval` and the [evaluation protocol](docs/evaluation.md).
 Never describe byte counts as model tokens or missing measurements as zero.
 
+# Standard Library
+
+Query `build/lm0 library list` and `library describe std_MODULE [std_MODULE_FUNCTION...]`
+before implementing reusable utilities. Use `use std_MODULE` to import catalogue
+signatures; do not copy foreign declarations or modify private handle fields.
+Read [the library guide](docs/libraries.md) and the returned ownership/status
+contracts. Check fallible statuses before using outputs; destroy owned handles
+once and respect borrowed-view lifetimes. `make` builds and verifies the bundled
+archive; `--stdlib-dir DIR` selects another matching installation.
+Keep public interfaces and defaults in `stdlib/catalog.json`. Reuse the byte buffer,
+checked allocator/growth, and status interfaces across implementations. Algorithms
+belong in LM0 v2; platform adapters and new tooling use C or assembly, without Python.
+Generated interfaces live under `build/stdlib`; update the catalogue, not those files.
+
 # Issue Reporting
 
 Follow the [issue-reporting workflow](docs/reporting.md) for suspected LM0 bugs,
@@ -34,4 +48,5 @@ preserve a local report and state **Not submitted**, with its path and the reaso
 # Validation
 Run `make smoke` for every native compiler change.
 Run `make eval` for evaluator changes (requires the C `json-c` development package).
+Run `make test-stdlib` for catalogue, library, import, or installation changes.
 Run `python3 -m unittest discover -s tests -v` before committing compiler changes.

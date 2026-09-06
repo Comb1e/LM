@@ -1,0 +1,64 @@
+module random version 2
+use std_core
+export c fn @std_random_seed(%rng:ptr<StdRng>, %seed:u64) -> void {
+^entry:
+    %zero = eq %seed, 0
+    branch %zero, ^default(), ^write(%seed)
+^default:
+    %value = call @std_core_random_zero_seed()
+    jump ^write(%value)
+^write(%value:u64):
+    %p = field %rng, state
+    store %p, %value
+    return
+}
+export c fn @std_random_next(%rng:ptr<StdRng>) -> u64 {
+^entry:
+    %p = field %rng, state
+    %x = load %p
+    %s1 = shr %x, 12
+    %a = xor %x, %s1
+    %s2 = shl %a, 25
+    %b = xor %a, %s2
+    %s3 = shr %b, 27
+    %c = xor %b, %s3
+    store %p, %c
+    %result = mul %c, 2685821657736338717
+    return %result
+}
+export c fn @std_random_bounded(%rng:ptr<StdRng>, %bound:u64, %out:ptr<u64>) -> i32 {
+^entry:
+    %zero = eq %bound, 0
+    branch %zero, ^invalid(), ^start()
+^start:
+    # xorshift64* emits 1..UINT64_MAX; reject the incomplete leading interval.
+    %threshold = rem 18446744073709551615:u64, %bound
+    jump ^draw(%threshold)
+^draw(%threshold:u64):
+    %value = call @std_random_next(%rng)
+    %accept = gt %value, %threshold
+    branch %accept, ^done(%value), ^draw(%threshold)
+^done(%value:u64):
+    %result = rem %value, %bound
+    store %out, %result
+    return 0
+^invalid:
+    return 1
+}
+export c fn @std_random_fill(%rng:ptr<StdRng>, %data:ptr<u8>, %len:u64) -> void {
+^entry:
+    jump ^loop(0)
+^loop(%i:u64):
+    %done = eq %i, %len
+    branch %done, ^done(), ^step(%i)
+^step(%i:u64):
+    %value = call @std_random_next(%rng)
+    %byte:u8 = cast %value
+    %index:i64 = cast %i
+    %p = offset %data, %index
+    store %p, %byte
+    %next = add %i, 1
+    jump ^loop(%next)
+^done:
+    return
+}

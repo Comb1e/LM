@@ -1,0 +1,156 @@
+module word_count version 2
+use std_map
+use std_text
+use std_io
+
+data @path = "examples/stdlib/words.txt"
+data @equal = "="
+data @newline = "\n"
+
+fn @count(%data:ptr<u8>, %len:u64, %map:ptr<StdMap>) -> i32 {
+^entry:
+    %value = stack i64, 1
+    jump ^scan(%value, 0, 0)
+^scan(%value:ptr<i64>, %start:u64, %i:u64):
+    %end = eq %i, %len
+    branch %end, ^word(%value, %start, %i, true), ^byte(%value, %start, %i)
+^byte(%value:ptr<i64>, %start:u64, %i:u64):
+    %idx:i64 = cast %i
+    %p = offset %data, %idx
+    %b = load %p
+    %separator = le %b, 32
+    %next = add %i, 1
+    branch %separator, ^word(%value, %start, %i, false), ^scan(%value, %start, %next)
+^word(%value:ptr<i64>, %start:u64, %i:u64, %end:bool):
+    %empty = eq %start, %i
+    branch %empty, ^next(%value, %i, %end), ^lookup(%value, %start, %i, %end)
+^lookup(%value:ptr<i64>, %start:u64, %i:u64, %end:bool):
+    %idx:i64 = cast %start
+    %key = offset %data, %idx
+    %size = sub %i, %start
+    store %value, 0
+    %status = call @std_map_get(%map, %key, %size, %value)
+    %missing = eq %status, 4
+    branch %missing, ^increment(%value, %i, %end, %key, %size), ^found(%value, %i, %end, %key, %size, %status)
+^found(%value:ptr<i64>, %i:u64, %end:bool, %key:ptr<u8>, %size:u64, %status:i32):
+    %ok = eq %status, 0
+    branch %ok, ^increment(%value, %i, %end, %key, %size), ^error(%status)
+^increment(%value:ptr<i64>, %i:u64, %end:bool, %key:ptr<u8>, %size:u64):
+    %old = load %value
+    %next = add %old, 1
+    %status = call @std_map_set(%map, %key, %size, %next)
+    %ok = eq %status, 0
+    branch %ok, ^next(%value, %i, %end), ^error(%status)
+^next(%value:ptr<i64>, %i:u64, %end:bool):
+    %next = add %i, 1
+    branch %end, ^done(), ^scan(%value, %next, %next)
+^done:
+    return 0
+^error(%status:i32):
+    return %status
+}
+fn @print_entry(%buf:ptr<StdBuf>, %key:ptr<u8>, %len:u64, %value:i64) -> i32 {
+^entry:
+    %status = call @std_bytes_append(%buf, %key, %len)
+    %ok = eq %status, 0
+    branch %ok, ^equal(), ^error(%status)
+^equal:
+    %p = address @equal
+    %status = call @std_bytes_append(%buf, %p, 1)
+    %ok = eq %status, 0
+    branch %ok, ^number(), ^error(%status)
+^number:
+    %status = call @std_text_format_i64(%value, %buf)
+    %ok = eq %status, 0
+    branch %ok, ^newline(), ^error(%status)
+^newline:
+    %p = address @newline
+    %status = call @std_bytes_append(%buf, %p, 1)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @show(%map:ptr<StdMap>, %buf:ptr<StdBuf>) -> i32 {
+^entry:
+    %cursor = stack u64, 1
+    %key = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %value = stack i64, 1
+    store %cursor, 0
+    jump ^loop(%cursor, %key, %len, %value)
+^loop(%cursor:ptr<u64>, %key:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<i64>):
+    %status = call @std_map_next(%map, %cursor, %key, %len, %value)
+    %end = eq %status, 8
+    branch %end, ^write(%key, %len), ^status(%cursor, %key, %len, %value, %status)
+^status(%cursor:ptr<u64>, %key:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<i64>, %status:i32):
+    %ok = eq %status, 0
+    branch %ok, ^append(%cursor, %key, %len, %value), ^error(%status)
+^append(%cursor:ptr<u64>, %key:ptr<ptr<u8>>, %len:ptr<u64>, %value:ptr<i64>):
+    %k = load %key
+    %n = load %len
+    %v = load %value
+    %status = call @print_entry(%buf, %k, %n, %v)
+    %ok = eq %status, 0
+    branch %ok, ^loop(%cursor, %key, %len, %value), ^error(%status)
+^write(%data:ptr<ptr<u8>>, %len:ptr<u64>):
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %status = call @std_io_stdout(%p, %n)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @process(%input:ptr<StdBuf>, %map:ptr<StdMap>, %output:ptr<StdBuf>) -> i32 {
+^entry:
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    call @std_bytes_view(%input, %data, %len)
+    %p = load %data
+    %n = load %len
+    call @std_text_lower_ascii(%p, %n)
+    %status = call @count(%p, %n, %map)
+    %ok = eq %status, 0
+    branch %ok, ^show(), ^error(%status)
+^show:
+    %status = call @show(%map, %output)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @main() -> i32 {
+^entry:
+    %input = stack ptr<StdBuf>, 1
+    %output = stack ptr<StdBuf>, 1
+    %map = stack ptr<StdMap>, 1
+    store %input, null
+    store %output, null
+    store %map, null
+    %path = address @path
+    %limit = call @std_core_file_limit()
+    %status = call @std_io_read_file(%path, 25, %limit, %input)
+    %ok = eq %status, 0
+    branch %ok, ^map(%input, %output, %map), ^cleanup(%input, %output, %map, %status)
+^map(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %map:ptr<ptr<StdMap>>):
+    %status = call @std_map_new(%map)
+    %ok = eq %status, 0
+    branch %ok, ^buffer(%input, %output, %map), ^cleanup(%input, %output, %map, %status)
+^buffer(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %map:ptr<ptr<StdMap>>):
+    %status = call @std_bytes_new(%output)
+    %ok = eq %status, 0
+    branch %ok, ^work(%input, %output, %map), ^cleanup(%input, %output, %map, %status)
+^work(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %map:ptr<ptr<StdMap>>):
+    %i = load %input
+    %o = load %output
+    %m = load %map
+    %status = call @process(%i, %m, %o)
+    jump ^cleanup(%input, %output, %map, %status)
+^cleanup(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %map:ptr<ptr<StdMap>>, %status:i32):
+    %i = load %input
+    %o = load %output
+    %m = load %map
+    call @std_bytes_destroy(%i)
+    call @std_bytes_destroy(%o)
+    call @std_map_destroy(%m)
+    return %status
+}

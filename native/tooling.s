@@ -31,6 +31,7 @@ GLOBAL cli_optimization
 GLOBAL cli_view
 GLOBAL cli_revision
 GLOBAL cli_describe_ops
+GLOBAL cli_stdlib_dir
 GLOBAL compact_view
 GLOBAL temp_directory
 GLOBAL temp_assembly
@@ -245,6 +246,7 @@ OPTION --replacement,cli_replacement
 OPTION --optimization,cli_optimization
 OPTION --view,cli_view
 OPTION --expect-revision,cli_revision
+OPTION --stdlib-dir,cli_stdlib_dir
 .text
 option_value:
  inc r12
@@ -277,7 +279,7 @@ FUNC main
  test eax,eax
  jz .cli_set_option
  inc rbx
- cmp rbx,9
+ cmp rbx,10
  jb .cli_option_scan
  EQ r15, opt_version
  jz .cli_version
@@ -306,6 +308,8 @@ FUNC main
  cmp qword ptr [cli_command],0
  je .cli_command_arg
  EQ "qword ptr [cli_command]",cmd_describe
+ jz .cli_describe_arg
+ EQ "qword ptr [cli_command]",library_command
  jz .cli_describe_arg
  cmp qword ptr [filename],0
  jne usage_error
@@ -427,6 +431,8 @@ FUNC main
  mov r12,[cli_command]
  EQ r12,cmd_describe
  jz .cli_describe
+ EQ r12,library_command
+ jz .cli_library_catalog
  EQ r12, cmd_emit_c
  jz unsupported_error
  EQ r12, cmd_bench
@@ -480,6 +486,10 @@ FUNC main
  call describe_ops
  xor eax,eax
  RETURN
+.cli_library_catalog:
+ call library_cli
+ xor eax,eax
+ RETURN
 .cli_replace:
  call replace_source
  call print_output
@@ -512,6 +522,8 @@ FUNC main
  C text_out, "offset j_kind"
  C json_string, "qword ptr [cli_kind]"
  C text_out, "offset j_build_end"
+ call library_link_metadata
+ C text_out, "offset j_output_end"
  xor eax,eax
  RETURN
 .cli_run:
@@ -554,8 +566,8 @@ unsupported_error:
  FAIL e_unsupported, m_unsupported
 .target_error:
  FAIL e_target, m_target
-STR version_text, "LM0 0.3.0 native x86_64-linux-gnu"
-STR help_text, "lm0 [--config FILE] check|emit-asm|build|run|inspect|replace|migrate SOURCE [OPTIONS]\nOutput: -o FILE; build: --kind exe|object|shared -O0 --link FILE --library NAME\nInspection: --function NAME [--block NAME] or --module; --view compact|full\nRepair: --function NAME [--block NAME] --replacement FILE -o FILE [--expect-revision SHA256]\nMigration: migrate SOURCE -o FILE; instruction guidance: describe OP...\nEmission: --entry; execution: --timeout SECONDS\nOnly -O0 is supported. emit-c, bench and --sanitize are unavailable."
+STR version_text, "LM0 0.4.0 native x86_64-linux-gnu"
+STR help_text, "lm0 [--config FILE] check|emit-asm|build|run|inspect|replace|migrate SOURCE [OPTIONS]\nOutput: -o FILE; build: --kind exe|object|shared -O0 --link FILE --library NAME\nLibraries: library list; library describe MODULE [std_MODULE_FUNCTION...]\nLibrary installation: --stdlib-dir DIR; v2 source imports: use std_MODULE\nInspection: --function NAME [--block NAME] or --module; --view compact|full\nRepair: --function NAME [--block NAME] --replacement FILE -o FILE [--expect-revision SHA256]\nMigration: migrate SOURCE -o FILE; instruction guidance: describe OP...\nEmission: --entry; execution: --timeout SECONDS\nOnly -O0 is supported. emit-c, bench and --sanitize are unavailable."
 STR m_usage, "Invalid command arguments; use lm0 --help"
 STR m_unsupported, "Native compiler supports assembly emission and -O0 only; emit-c, bench and --sanitize are unavailable"
 STR m_target, "Unsupported compiler target"
@@ -591,7 +603,7 @@ STR j_check_end, ",\"functions\":%lu,\"diagnostics\":[]}\n"
 STR j_output, "{\"ok\":true,\"output\":"
 STR j_output_end, "}\n"
 STR j_kind, ",\"kind\":"
-STR j_build_end, ",\"optimization\":\"0\",\"sanitized\":false}\n"
+STR j_build_end, ",\"optimization\":\"0\",\"sanitized\":false"
 STR run_template, "/tmp/lm0-run-XXXXXX"
 STR fmt_program, "%s/program"
 .section .rodata
@@ -612,6 +624,7 @@ FUNC list_count
 FUNC print_output
  C text_out, "offset j_output"
  C json_string, "qword ptr [cli_output]"
+ call library_link_metadata
  C text_out, "offset j_output_end"
  RETURN
 
@@ -735,7 +748,7 @@ FUNC native_build
  mov r12,rax
  C list_count, "qword ptr [cli_libraries]"
  add r12,rax
- add r12,16
+ add r12,20
  shl r12,3
  C alloc, r12
  mov r12,rax
@@ -778,7 +791,7 @@ FUNC native_build
  mov r14,[cli_libraries]
 .build_library_loop:
  test r14,r14
- jz .build_execute
+ jz .build_standard
  lea rdi,[rbp-48]
  C asprintf, rdi, "offset fmt_library", "qword ptr [r14+NAME]"
  cmp eax,0
@@ -788,6 +801,19 @@ FUNC native_build
  inc r13
  mov r14,[r14+NEXT]
  jmp .build_library_loop
+.build_standard:
+ cmp qword ptr [library_used],0
+ je .build_execute
+ call library_archive
+ mov [r12+r13*8],rax
+ inc r13
+ EQ "qword ptr [cli_kind]",kind_shared
+ jnz .build_standard_math
+ mov qword ptr [r12+r13*8],offset library_hide_link
+ inc r13
+.build_standard_math:
+ mov qword ptr [r12+r13*8],offset library_math_link
+ inc r13
 .build_execute:
  imul rsi,qword ptr [cfg_build_timeout],1000
  C execute_process, r12, rsi

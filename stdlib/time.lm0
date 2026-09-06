@@ -1,0 +1,13 @@
+module time version 2
+use std_core
+export c fn @std_time_elapsed(%start:u64, %end:u64, %out:ptr<u64>) -> i32 {
+^entry:
+    %valid = ge %end, %start
+    branch %valid, ^done(), ^range()
+^done:
+    %duration = sub %end, %start
+    store %out, %duration
+    return 0
+^range:
+    return 2
+}

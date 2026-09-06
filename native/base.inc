@@ -16,7 +16,8 @@
 .equ SIZE, 104
 .equ ALIGN, 112
 .equ AUX, 120
-.equ NODE_BYTES, 128
+.equ ORIGIN, 128
+.equ NODE_BYTES, 144
 .equ TX, 8
 .equ TS, 16
 .equ TE, 24

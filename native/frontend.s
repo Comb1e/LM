@@ -800,6 +800,8 @@ FUNC parse_function
  call node
  mov r14, rax
  mov [r14+FLAGS], r12
+ mov rax,[library_importing]
+ mov [r14+ORIGIN],rax
  mov [r14+TOKEN], r13
  C reference, 64
  mov [r14+NAME], rax
@@ -860,6 +862,8 @@ FUNC parse_function
  RETURN
 
 FUNC parse_module
+ mov qword ptr [library_used],0
+ mov qword ptr [library_importing],0
  mov qword ptr [functions], 0
  mov qword ptr [structs], 0
  mov qword ptr [data_nodes], 0
@@ -873,10 +877,17 @@ FUNC parse_module
  call integer
  mov [module_version], rax
  call endline
+ call parse_declarations
+ RETURN
+
+FUNC parse_declarations
 .module_loop:
  mov r12, [tok]
  cmp qword ptr [r12+TK], K_EOF
  je .module_done
+ C accept, "offset library_use_word"
+ test eax,eax
+ jnz .module_use
  C accept, "offset s_struct"
  test eax, eax
  jnz .module_struct
@@ -962,6 +973,14 @@ FUNC parse_module
  jmp .module_loop
 .module_done:
  RETURN
+.module_use:
+ cmp qword ptr [module_version],2
+ jne .version_error
+ C take_kind,K_WORD
+ mov r13,rax
+ call endline
+ C library_import,r13,r12
+ jmp .module_loop
 .duplicate_error:
  FAIL e_duplicate, m_duplicate
 STR reserved_array, "array"

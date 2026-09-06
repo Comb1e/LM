@@ -1,0 +1,114 @@
+module json_transform version 2
+use std_json
+use std_io
+use std_math
+
+data @input_path = "examples/stdlib/input.json"
+data @output_path = "build/stdlib-transformed.json"
+data @key = "count"
+
+fn @update(%doc:ptr<StdJson>, %number:ptr<StdBuf>) -> i32 {
+^entry:
+    %slot = stack ptr<StdJsonNode>, 1
+    %value = stack i64, 1
+    %next = stack i64, 1
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    %root = call @std_json_root(%doc)
+    %key = address @key
+    %status = call @std_json_get(%root, %key, 5, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^integer(%slot, %value, %next, %data, %len, %root, %key), ^error(%status)
+^integer(%slot:ptr<ptr<StdJsonNode>>, %value:ptr<i64>, %next:ptr<i64>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %root:ptr<StdJsonNode>, %key:ptr<u8>):
+    %node = load %slot
+    %status = call @std_json_i64(%node, %value)
+    %ok = eq %status, 0
+    branch %ok, ^increment(%slot, %value, %next, %data, %len, %root, %key), ^error(%status)
+^increment(%slot:ptr<ptr<StdJsonNode>>, %value:ptr<i64>, %next:ptr<i64>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %root:ptr<StdJsonNode>, %key:ptr<u8>):
+    %v = load %value
+    %status = call @std_math_add_i64(%v, 1, %next)
+    %ok = eq %status, 0
+    branch %ok, ^format(%slot, %next, %data, %len, %root, %key), ^error(%status)
+^format(%slot:ptr<ptr<StdJsonNode>>, %next:ptr<i64>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %root:ptr<StdJsonNode>, %key:ptr<u8>):
+    %v = load %next
+    %status = call @std_text_format_i64(%v, %number)
+    %ok = eq %status, 0
+    branch %ok, ^create(%slot, %data, %len, %root, %key), ^error(%status)
+^create(%slot:ptr<ptr<StdJsonNode>>, %data:ptr<ptr<u8>>, %len:ptr<u64>, %root:ptr<StdJsonNode>, %key:ptr<u8>):
+    call @std_bytes_view(%number, %data, %len)
+    %p = load %data
+    %n = load %len
+    %status = call @std_json_create(%doc, 3, %p, %n, %slot)
+    %ok = eq %status, 0
+    branch %ok, ^set(%slot, %root, %key), ^error(%status)
+^set(%slot:ptr<ptr<StdJsonNode>>, %root:ptr<StdJsonNode>, %key:ptr<u8>):
+    %node = load %slot
+    %status = call @std_json_set(%root, %key, 5, %node)
+    return %status
+^error(%status:i32):
+    return %status
+}
+fn @main() -> i32 {
+^entry:
+    %input = stack ptr<StdBuf>, 1
+    %output = stack ptr<StdBuf>, 1
+    %number = stack ptr<StdBuf>, 1
+    %doc = stack ptr<StdJson>, 1
+    %data = stack ptr<u8>, 1
+    %len = stack u64, 1
+    store %input, null
+    store %output, null
+    store %number, null
+    store %doc, null
+    %path = address @input_path
+    %limit = call @std_core_file_limit()
+    %status = call @std_io_read_file(%path, 26, %limit, %input)
+    %ok = eq %status, 0
+    branch %ok, ^parse(%input, %output, %number, %doc, %data, %len), ^cleanup(%input, %output, %number, %doc, %status)
+^parse(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %buf = load %input
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %status = call @std_json_parse(%p, %n, 0, %doc)
+    %ok = eq %status, 0
+    branch %ok, ^buffer(%input, %output, %number, %doc, %data, %len), ^cleanup(%input, %output, %number, %doc, %status)
+^buffer(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %status = call @std_bytes_new(%number)
+    %ok = eq %status, 0
+    branch %ok, ^update(%input, %output, %number, %doc, %data, %len), ^cleanup(%input, %output, %number, %doc, %status)
+^update(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %document = load %doc
+    %buf = load %number
+    %status = call @update(%document, %buf)
+    %ok = eq %status, 0
+    branch %ok, ^serialize(%input, %output, %number, %doc, %data, %len), ^cleanup(%input, %output, %number, %doc, %status)
+^serialize(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %document = load %doc
+    %limit = call @std_core_file_limit()
+    %status = call @std_json_stringify(%document, 0, %limit, %output)
+    %ok = eq %status, 0
+    branch %ok, ^write(%input, %output, %number, %doc, %data, %len), ^cleanup(%input, %output, %number, %doc, %status)
+^write(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %data:ptr<ptr<u8>>, %len:ptr<u64>):
+    %buf = load %output
+    call @std_bytes_view(%buf, %data, %len)
+    %p = load %data
+    %n = load %len
+    %path = address @output_path
+    %status = call @std_io_write_file(%path, 28, %p, %n)
+    %ok = eq %status, 0
+    branch %ok, ^stdout(%input, %output, %number, %doc, %p, %n), ^cleanup(%input, %output, %number, %doc, %status)
+^stdout(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %p:ptr<u8>, %n:u64):
+    %status = call @std_io_stdout(%p, %n)
+    jump ^cleanup(%input, %output, %number, %doc, %status)
+^cleanup(%input:ptr<ptr<StdBuf>>, %output:ptr<ptr<StdBuf>>, %number:ptr<ptr<StdBuf>>, %doc:ptr<ptr<StdJson>>, %status:i32):
+    %i = load %input
+    %o = load %output
+    %b = load %number
+    %d = load %doc
+    call @std_bytes_destroy(%i)
+    call @std_bytes_destroy(%o)
+    call @std_bytes_destroy(%b)
+    call @std_json_destroy(%d)
+    return %status
+}

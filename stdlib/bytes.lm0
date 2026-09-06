@@ -1,0 +1,167 @@
+module bytes version 2
+use std_core
+
+export c fn @std_bytes_compare(%a:ptr<u8>, %an:u64, %b:ptr<u8>, %bn:u64) -> i32 {
+^entry:
+    jump ^loop(0)
+^loop(%i:u64):
+    %ae = eq %i, %an
+    branch %ae, ^length(), ^bcheck(%i)
+^bcheck(%i:u64):
+    %be = eq %i, %bn
+    branch %be, ^greater(), ^compare(%i)
+^compare(%i:u64):
+    %idx:i64 = cast %i
+    %ap = offset %a, %idx
+    %bp = offset %b, %idx
+    %av = load %ap
+    %bv = load %bp
+    %lt = lt %av, %bv
+    branch %lt, ^less(), ^equal(%i, %av, %bv)
+^equal(%i:u64, %av:u8, %bv:u8):
+    %gt = gt %av, %bv
+    %next = add %i, 1
+    branch %gt, ^greater(), ^loop(%next)
+^length:
+    %same = eq %an, %bn
+    branch %same, ^same(), ^less()
+^same:
+    return 0
+^less:
+    return -1
+^greater:
+    return 1
+}
+
+export c fn @std_bytes_find(%data:ptr<u8>, %len:u64, %needle:ptr<u8>, %size:u64, %out:ptr<u64>) -> i32 {
+^entry:
+    %fits = le %size, %len
+    branch %fits, ^start(), ^missing()
+^start:
+    %last = sub %len, %size
+    jump ^loop(0, %last)
+^loop(%i:u64, %last:u64):
+    %index:i64 = cast %i
+    %p = offset %data, %index
+    %cmp = call @std_bytes_compare(%p, %size, %needle, %size)
+    %same = eq %cmp, 0
+    branch %same, ^found(%i), ^next(%i, %last)
+^next(%i:u64, %last:u64):
+    %done = eq %i, %last
+    %n = add %i, 1
+    branch %done, ^missing(), ^loop(%n, %last)
+^found(%i:u64):
+    store %out, %i
+    return 0
+^missing:
+    return 4
+}
+
+export c fn @std_bytes_copy(%dst:ptr<u8>, %capacity:u64, %src:ptr<u8>, %len:u64) -> i32 {
+^entry:
+    %fits = le %len, %capacity
+    branch %fits, ^copy(), ^range()
+^copy:
+    move %dst, %src, %len
+    return 0
+^range:
+    return 2
+}
+
+export c fn @std_bytes_new(%out:ptr<ptr<StdBuf>>) -> i32 {
+^entry:
+    %slot:ptr<ptr<void>> = cast %out
+    %size = sizeof StdBuf
+    %status = call @std_core_allocate(1, %size, %slot)
+    return %status
+}
+
+export c fn @std_bytes_destroy(%buf:ptr<StdBuf>) -> void {
+^entry:
+    %null = eq %buf, null
+    branch %null, ^done(), ^release()
+^release:
+    %p = field %buf, data
+    %data = load %p
+    %raw:ptr<void> = cast %data
+    call @std_core_release(%raw)
+    %handle:ptr<void> = cast %buf
+    call @std_core_release(%handle)
+    return
+^done:
+    return
+}
+
+export c fn @std_bytes_reserve(%buf:ptr<StdBuf>, %capacity:u64) -> i32 {
+^entry:
+    %p = field %buf, data
+    %raw:ptr<ptr<void>> = cast %p
+    %cap = field %buf, cap
+    %status = call @std_core_grow(%raw, %cap, %capacity, 1)
+    return %status
+}
+
+export c fn @std_bytes_append(%buf:ptr<StdBuf>, %src:ptr<u8>, %len:u64) -> i32 {
+^entry:
+    %lp = field %buf, len
+    %old = load %lp
+    %room = sub 9223372036854775807:u64, %old
+    %fits = le %len, %room
+    branch %fits, ^alias(%old), ^range()
+^alias(%old:u64):
+    %dp = field %buf, data
+    %base = load %dp
+    %bi = ptrtoint %base
+    %si = ptrtoint %src
+    %delta = sub %si, %bi
+    %inside = le %delta, %old
+    %total = add %old, %len
+    %status = call @std_bytes_reserve(%buf, %total)
+    %ok = eq %status, 0
+    branch %ok, ^select(%old, %total, %delta, %inside), ^error(%status)
+^select(%old:u64, %total:u64, %delta:u64, %inside:bool):
+    %dp = field %buf, data
+    %base = load %dp
+    branch %inside, ^internal(%old, %total, %base, %delta), ^write(%old, %total, %base, %src)
+^internal(%old:u64, %total:u64, %base:ptr<u8>, %delta:u64):
+    %index:i64 = cast %delta
+    %source = offset %base, %index
+    jump ^write(%old, %total, %base, %source)
+^write(%old:u64, %total:u64, %base:ptr<u8>, %source:ptr<u8>):
+    %index:i64 = cast %old
+    %dest = offset %base, %index
+    move %dest, %source, %len
+    %lp = field %buf, len
+    store %lp, %total
+    return 0
+^range:
+    return 2
+^error(%status:i32):
+    return %status
+}
+
+export c fn @std_bytes_push(%buf:ptr<StdBuf>, %byte:u8) -> i32 {
+^entry:
+    %slot = stack u8, 1
+    store %slot, %byte
+    %status = call @std_bytes_append(%buf, %slot, 1)
+    return %status
+}
+
+export c fn @std_bytes_clear(%buf:ptr<StdBuf>) -> void {
+^entry:
+    %p = field %buf, len
+    store %p, 0
+    return
+}
+
+export c fn @std_bytes_view(%buf:ptr<StdBuf>, %data:ptr<ptr<u8>>, %len:ptr<u64>) -> void {
+^entry:
+    %dp = field %buf, data
+    %lp = field %buf, len
+    %d = load %dp
+    %n = load %lp
+    store %data, %d
+    store %len, %n
+    return
+}

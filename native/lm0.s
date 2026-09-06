@@ -8,4 +8,5 @@
 .include "native/backend.s"
 .include "native/tooling.s"
 .include "native/migrate.s"
+.include "native/library.s"
 .section .note.GNU-stack,"",@progbits

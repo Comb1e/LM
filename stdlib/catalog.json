@@ -1,0 +1,129 @@
+{
+  "abi": 1,
+  "policy": "Status i32: 0 success, 1 invalid argument/type, 2 range, 3 allocation failure, 4 missing, 5 encoding, 6 parse, 7 I/O, 8 EOF, 9 limit. Outputs unchanged on failure except documented progress. Output storage must be valid, nonnull and disjoint from inputs and handle storage. Byte spans must be initialized and <= INT64_MAX bytes; null is allowed only for empty spans. Handles must be live and nonnull except destroy/close. Handles and views are borrowed unless stated owned. Invalid/dangling pointers remain undefined behavior. Container fields are private. Mutation invalidates byte views and iterators; JSON node handles last until document destruction. No internal synchronization.",
+  "statuses": [
+    ["OK",0,"success"], ["INVALID",1,"invalid argument or type"],
+    ["RANGE",2,"range"], ["NOMEM",3,"allocation failure"],
+    ["MISSING",4,"missing"], ["ENCODING",5,"encoding"],
+    ["PARSE",6,"parse"], ["IO",7,"I/O"], ["EOF",8,"end of input"], ["LIMIT",9,"limit"]
+  ],
+  "constants": {"initial_capacity": 16, "json_depth": 128, "json_nodes": 1000000, "file_limit": 16777216, "random_zero_seed": "11400714819323198485"},
+  "types": {
+    "StdBuf": [["data","ptr<u8>"],["len","u64"],["cap","u64"]],
+    "StdVec": [["data","ptr<i64>"],["len","u64"],["cap","u64"]],
+    "StdSlot": [["key","ptr<u8>"],["len","u64"],["value","i64"],["hash","u64"],["state","u8"]],
+    "StdMap": [["slots","ptr<StdSlot>"],["len","u64"],["cap","u64"],["tombs","u64"]],
+    "StdRng": [["state","u64"]],
+    "StdFile": [["fd","i32"]],
+    "StdJsonNode": [["kind","i32"],["text","ptr<StdBuf>"],["key","ptr<StdBuf>"],["child","ptr<StdJsonNode>"],["tail","ptr<StdJsonNode>"],["next","ptr<StdJsonNode>"],["allocated","ptr<StdJsonNode>"],["owner","ptr<StdJson>"],["parent","ptr<StdJsonNode>"]],
+    "StdJson": [["head","ptr<StdJsonNode>"],["root","ptr<StdJsonNode>"],["count","u64"]]
+  },
+  "modules": [
+    {"name":"std_core","depends":[],"summary":"Statuses, shared types and recoverable allocation.","functions":[
+      ["status_text","ptr<u8>",[["status","i32"]],"Borrowed static NUL-terminated English description; unknown codes return unknown status."],
+      ["allocate","i32",[["count","u64"],["size","u64"],["out","ptr<ptr<void>>"]],"Owned zero-initialized allocation, checked product <= INT64_MAX. Zero bytes still return a freeable base. Release with std_core_release."],
+      ["release","void",[["base","ptr<void>"]],"Release an owned allocation base, or null."],
+      ["grow","i32",[["data","ptr<ptr<void>>"],["capacity","ptr<u64>"],["need","u64"],["width","u64"]],"Grow owned allocation geometrically; preserve data and capacity on failure. New storage is uninitialized. Invalidates views when growth occurs."],
+      ["initial_capacity","u64",[],"Configured initial capacity."],
+      ["json_depth","u64",[],"Configured default JSON depth limit."],
+      ["json_nodes","u64",[],"Configured JSON node budget."],
+      ["file_limit","u64",[],"Configured default file byte limit; whole-file API takes an explicit limit."],
+      ["random_zero_seed","u64",[],"Configured replacement for a zero RNG seed."]
+    ]},
+    {"name":"std_bytes","depends":["std_core"],"summary":"Byte spans and owned growable buffers.","functions":[
+      ["compare","i32",[["a","ptr<u8>"],["an","u64"],["b","ptr<u8>"],["bn","u64"]],"Lexicographic unsigned byte comparison returns -1, 0, or 1, not status. Null spans allowed only at zero length."],
+      ["find","i32",[["data","ptr<u8>"],["len","u64"],["needle","ptr<u8>"],["size","u64"],["out","ptr<u64>"]],"First matching byte index; empty needle matches zero; missing returns 4. Null spans allowed only when empty."],
+      ["copy","i32",[["dst","ptr<u8>"],["capacity","u64"],["src","ptr<u8>"],["len","u64"]],"Overlap-safe byte copy; range status if len exceeds capacity; null allowed for zero length."],
+      ["new","i32",[["out","ptr<ptr<StdBuf>>"]],"Create an owned empty buffer; destroy with std_bytes_destroy."],
+      ["destroy","void",[["buf","ptr<StdBuf>"]],"Destroy buffer and owned bytes; accepts null."],
+      ["reserve","i32",[["buf","ptr<StdBuf>"],["capacity","u64"]],"Ensure at least capacity bytes; length unchanged; failure preserves contents."],
+      ["append","i32",[["buf","ptr<StdBuf>"],["src","ptr<u8>"],["len","u64"]],"Append span; self-append and interior spans supported. Failure preserves contents. No implicit NUL byte."],
+      ["push","i32",[["buf","ptr<StdBuf>"],["byte","u8"]],"Append one byte."],
+      ["clear","void",[["buf","ptr<StdBuf>"]],"Set length to zero, retain capacity."],
+      ["view","void",[["buf","ptr<StdBuf>"],["data","ptr<ptr<u8>>"],["len","ptr<u64>"]],"Return borrowed bytes and length; mutation or destruction invalidates the view."]
+    ]},
+    {"name":"std_text","depends":["std_bytes"],"summary":"UTF-8 scalars, ASCII transforms and decimal integers.","functions":[
+      ["next","i32",[["data","ptr<u8>"],["len","u64"],["index","ptr<u64>"],["scalar","ptr<u32>"]],"Decode one Unicode scalar and advance byte index on success. EOF at len; encoding error leaves outputs unchanged."],
+      ["validate","i32",[["data","ptr<u8>"],["len","u64"]],"Validate complete UTF-8, including overlong encodings, surrogates and scalar range."],
+      ["lower_ascii","void",[["data","ptr<u8>"],["len","u64"]],"In-place ASCII A-Z conversion; all other bytes unchanged."],
+      ["upper_ascii","void",[["data","ptr<u8>"],["len","u64"]],"In-place ASCII a-z conversion; all other bytes unchanged."],
+      ["parse_i64","i32",[["data","ptr<u8>"],["len","u64"],["out","ptr<i64>"]],"Parse complete decimal integer with optional minus. No whitespace or plus. Empty/invalid returns parse; overflow returns range."],
+      ["parse_u64","i32",[["data","ptr<u8>"],["len","u64"],["out","ptr<u64>"]],"Parse complete unsigned decimal digits; no sign or whitespace. Overflow returns range."],
+      ["format_i64","i32",[["value","i64"],["out","ptr<StdBuf>"]],"Append decimal representation, atomically on failure."],
+      ["format_u64","i32",[["value","u64"],["out","ptr<StdBuf>"]],"Append unsigned decimal representation, atomically on failure."]
+    ]},
+    {"name":"std_vec","depends":["std_core"],"summary":"Owned checked i64 vectors.","functions":[
+      ["new","i32",[["out","ptr<ptr<StdVec>>"]],"Create owned empty i64 vector."],
+      ["destroy","void",[["vec","ptr<StdVec>"]],"Destroy owned vector; null accepted."],
+      ["len","u64",[["vec","ptr<StdVec>"]],"Number of initialized elements."],
+      ["reserve","i32",[["vec","ptr<StdVec>"],["capacity","u64"]],"Reserve elements without changing length; failure preserves contents."],
+      ["get","i32",[["vec","ptr<StdVec>"],["index","u64"],["out","ptr<i64>"]],"Checked index lookup."],
+      ["set","i32",[["vec","ptr<StdVec>"],["index","u64"],["value","i64"]],"Checked element replacement."],
+      ["push","i32",[["vec","ptr<StdVec>"],["value","i64"]],"Append value; failure preserves contents."],
+      ["insert","i32",[["vec","ptr<StdVec>"],["index","u64"],["value","i64"]],"Insert at index <= length, shifting subsequent elements."],
+      ["remove","i32",[["vec","ptr<StdVec>"],["index","u64"],["out","ptr<i64>"]],"Remove checked index and return removed value."],
+      ["sort","void",[["vec","ptr<StdVec>"]],"In-place ascending signed sort, no allocation."],
+      ["search","i32",[["vec","ptr<StdVec>"],["value","i64"],["out","ptr<u64>"]],"First equal index in ascending sorted vector; missing returns 4."]
+    ]},
+    {"name":"std_map","depends":["std_bytes"],"summary":"Owned byte-key/i64 map; iteration order unspecified.","functions":[
+      ["new","i32",[["out","ptr<ptr<StdMap>>"]],"Create owned empty map."],
+      ["destroy","void",[["map","ptr<StdMap>"]],"Destroy map and copied keys; null accepted."],
+      ["len","u64",[["map","ptr<StdMap>"]],"Number of entries."],
+      ["set","i32",[["map","ptr<StdMap>"],["key","ptr<u8>"],["len","u64"],["value","i64"]],"Insert copied key or replace value; empty keys allowed; failure preserves map."],
+      ["get","i32",[["map","ptr<StdMap>"],["key","ptr<u8>"],["len","u64"],["out","ptr<i64>"]],"Lookup exact byte key; missing returns 4."],
+      ["remove","i32",[["map","ptr<StdMap>"],["key","ptr<u8>"],["len","u64"]],"Delete key, freeing its storage; missing returns 4."],
+      ["next","i32",[["map","ptr<StdMap>"],["cursor","ptr<u64>"],["key","ptr<ptr<u8>>"],["len","ptr<u64>"],["value","ptr<i64>"]],"Start cursor at zero; returns borrowed key, value and advances cursor. EOF returns 8. Mutation invalidates iteration."]
+    ]},
+    {"name":"std_math","depends":["std_core"],"summary":"Checked i64 arithmetic and f64 libm operations.","functions":[
+      ["add_i64","i32",[["a","i64"],["b","i64"],["out","ptr<i64>"]],"Checked signed addition; overflow returns range."],
+      ["sub_i64","i32",[["a","i64"],["b","i64"],["out","ptr<i64>"]],"Checked signed subtraction; overflow returns range."],
+      ["mul_i64","i32",[["a","i64"],["b","i64"],["out","ptr<i64>"]],"Checked signed multiplication; overflow returns range."],
+      ["sqrt","f64",[["x","f64"]],"System libm square root; IEEE NaN/infinity results, no status/errno API."],
+      ["sin","f64",[["x","f64"]],"System libm sine, radians."],
+      ["cos","f64",[["x","f64"]],"System libm cosine, radians."],
+      ["log","f64",[["x","f64"]],"System libm natural logarithm."],
+      ["exp","f64",[["x","f64"]],"System libm natural exponential."],
+      ["pow","f64",[["x","f64"],["y","f64"]],"System libm exponentiation."],
+      ["floor","f64",[["x","f64"]],"System libm floor."],
+      ["ceil","f64",[["x","f64"]],"System libm ceiling."]
+    ]},
+    {"name":"std_random","depends":["std_core"],"summary":"Caller-owned xorshift64* state; not cryptographic.","functions":[
+      ["seed","void",[["rng","ptr<StdRng>"],["seed","u64"]],"Initialize caller storage; zero maps to configured nonzero seed."],
+      ["next","u64",[["rng","ptr<StdRng>"]],"Advance initialized generator with shifts 12,25,27 and multiplier 2685821657736338717."],
+      ["bounded","i32",[["rng","ptr<StdRng>"],["bound","u64"],["out","ptr<u64>"]],"Unbiased result in [0,bound); zero bound returns invalid without advancing state."],
+      ["fill","void",[["rng","ptr<StdRng>"],["data","ptr<u8>"],["len","u64"]],"One generator draw per byte, taking low eight bits; empty span permitted."]
+    ]},
+    {"name":"std_io","depends":["std_bytes"],"summary":"Synchronous POSIX file and console I/O.","functions":[
+      ["open","i32",[["path","ptr<u8>"],["len","u64"],["mode","i32"],["out","ptr<ptr<StdFile>>"]],"Owned file; length-delimited path rejects embedded NUL. Modes 0 read, 1 create/truncate, 2 create/append. Destroy with close."],
+      ["close","i32",[["file","ptr<StdFile>"]],"Consume file even on close failure; null succeeds. Do not retry."],
+      ["read","i32",[["file","ptr<StdFile>"],["data","ptr<u8>"],["capacity","u64"],["count","ptr<u64>"]],"Read up to capacity, retry EINTR. EOF reports 8 with count zero; zero capacity succeeds. Other failures leave count unchanged."],
+      ["write","i32",[["file","ptr<StdFile>"],["data","ptr<u8>"],["len","u64"],["count","ptr<u64>"]],"Write complete span, retry EINTR; count reports bytes written even on I/O failure."],
+      ["read_file","i32",[["path","ptr<u8>"],["len","u64"],["limit","u64"],["out","ptr<ptr<StdBuf>>"]],"Read bounded whole file into owned buffer. Over limit returns 9; output unchanged on failure."],
+      ["write_file","i32",[["path","ptr<u8>"],["len","u64"],["data","ptr<u8>"],["size","u64"]],"Create/truncate and write complete file. Failure may leave partial external file contents."],
+      ["stdout","i32",[["data","ptr<u8>"],["len","u64"]],"Write complete stdout span, retry EINTR. No newline or NUL appended."],
+      ["stderr","i32",[["data","ptr<u8>"],["len","u64"]],"Write complete stderr span, retry EINTR."]
+    ]},
+    {"name":"std_time","depends":["std_core"],"summary":"Nanosecond clocks and interruption-resilient sleep.","functions":[
+      ["monotonic","i32",[["out","ptr<u64>"]],"CLOCK_MONOTONIC nanoseconds; use for durations."],
+      ["unix","i32",[["out","ptr<i64>"]],"CLOCK_REALTIME signed nanoseconds since Unix epoch; may move backwards."],
+      ["elapsed","i32",[["start","u64"],["end","u64"],["out","ptr<u64>"]],"Checked end minus start; backwards interval returns range."],
+      ["sleep","i32",[["nanoseconds","u64"]],"Sleep for duration, retry interruption; platform error returns I/O."]
+    ]},
+    {"name":"std_json","depends":["std_text"],"summary":"Owned JSON documents, borrowed nodes, strict parsing and bounded serialization.","functions":[
+      ["new","i32",[["out","ptr<ptr<StdJson>>"]],"Create owned empty document with no root."],
+      ["destroy","void",[["doc","ptr<StdJson>"]],"Destroy document and every allocated node/view; null accepted."],
+      ["parse","i32",[["data","ptr<u8>"],["len","u64"],["depth","u64"],["out","ptr<ptr<StdJson>>"]],"Parse one complete JSON value; depth 0 uses default. Reject duplicate object keys, invalid UTF-8, unpaired surrogates, trailing data. Preserve number lexemes. Owned document output."],
+      ["root","ptr<StdJsonNode>",[["doc","ptr<StdJson>"]],"Borrowed root, or null for empty document."],
+      ["kind","i32",[["node","ptr<StdJsonNode>"]],"Kind, not status: 0 null, 1 false, 2 true, 3 number, 4 string, 5 array, 6 object."],
+      ["text","i32",[["node","ptr<StdJsonNode>"],["data","ptr<ptr<u8>>"],["len","ptr<u64>"]],"Borrow decoded string or original number lexeme; other kinds return invalid."],
+      ["i64","i32",[["node","ptr<StdJsonNode>"],["out","ptr<i64>"]],"Checked conversion of number lexeme containing only decimal integer syntax; fractions/exponents return parse."],
+      ["get","i32",[["node","ptr<StdJsonNode>"],["key","ptr<u8>"],["len","u64"],["out","ptr<ptr<StdJsonNode>>"]],"Borrow exact object member; missing returns 4, wrong kind returns invalid."],
+      ["at","i32",[["node","ptr<StdJsonNode>"],["index","u64"],["out","ptr<ptr<StdJsonNode>>"]],"Borrow checked array element; out-of-range returns 2."],
+      ["create","i32",[["doc","ptr<StdJson>"],["kind","i32"],["data","ptr<u8>"],["len","u64"],["out","ptr<ptr<StdJsonNode>>"]],"Create detached document-owned node. String input is decoded UTF-8; number is validated lexeme; other kinds require empty span. Node budget enforced."],
+      ["set_root","i32",[["doc","ptr<StdJson>"],["node","ptr<StdJsonNode>"]],"Set detached node from same document as root. Previous root remains document-owned and becomes detached."],
+      ["append","i32",[["array","ptr<StdJsonNode>"],["value","ptr<StdJsonNode>"]],"Attach detached same-document node to array; reject cycles and root attachment."],
+      ["set","i32",[["object","ptr<StdJsonNode>"],["key","ptr<u8>"],["len","u64"],["value","ptr<StdJsonNode>"]],"Copy UTF-8 key and attach detached same-document node. Replace existing member; old value becomes detached, still document-owned. Reject cycles."],
+      ["stringify","i32",[["doc","ptr<StdJson>"],["depth","u64"],["limit","u64"],["out","ptr<ptr<StdBuf>>"]],"Serialize compact JSON into owned buffer, preserving number lexemes and insertion order. Depth 0 uses default. Enforce explicit output-byte limit."]
+    ]}
+  ]
+}

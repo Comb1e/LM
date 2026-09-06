@@ -1,0 +1,62 @@
+module math version 2
+use std_core
+export c fn @std_math_add_i64(%a:i64, %b:i64, %out:ptr<i64>) -> i32 {
+^entry:
+    %r = add %a, %b
+    %x = xor %a, %r
+    %y = xor %b, %r
+    %bits = and %x, %y
+    %overflow = lt %bits, 0
+    branch %overflow, ^range(), ^done(%r)
+^done(%r:i64):
+    store %out, %r
+    return 0
+^range:
+    return 2
+}
+export c fn @std_math_sub_i64(%a:i64, %b:i64, %out:ptr<i64>) -> i32 {
+^entry:
+    %r = sub %a, %b
+    %x = xor %a, %b
+    %y = xor %a, %r
+    %bits = and %x, %y
+    %overflow = lt %bits, 0
+    branch %overflow, ^range(), ^done(%r)
+^done(%r:i64):
+    store %out, %r
+    return 0
+^range:
+    return 2
+}
+export c fn @std_math_mul_i64(%a:i64, %b:i64, %out:ptr<i64>) -> i32 {
+^entry:
+    %an = lt %a, 0
+    %bn = lt %b, 0
+    %negative = ne %an, %bn
+    %au:u64 = cast %a
+    %bu:u64 = cast %b
+    branch %an, ^an(%au, %bu, %bn, %negative), ^bn(%au, %bu, %bn, %negative)
+^an(%au:u64, %bu:u64, %bn:bool, %negative:bool):
+    %mag = neg %au
+    jump ^bn(%mag, %bu, %bn, %negative)
+^bn(%au:u64, %bu:u64, %bn:bool, %negative:bool):
+    branch %bn, ^bneg(%au, %bu, %negative), ^limit(%au, %bu, %negative)
+^bneg(%au:u64, %bu:u64, %negative:bool):
+    %mag = neg %bu
+    jump ^limit(%au, %mag, %negative)
+^limit(%au:u64, %bu:u64, %negative:bool):
+    %zero = eq %bu, 0
+    branch %zero, ^done(0), ^bound(%au, %bu, %negative)
+^bound(%au:u64, %bu:u64, %negative:bool):
+    branch %negative, ^check(%au, %bu, 9223372036854775808), ^check(%au, %bu, 9223372036854775807)
+^check(%au:u64, %bu:u64, %limit:u64):
+    %max = div %limit, %bu
+    %fits = le %au, %max
+    %result = mul %a, %b
+    branch %fits, ^done(%result), ^range()
+^done(%r:i64):
+    store %out, %r
+    return 0
+^range:
+    return 2
+}
